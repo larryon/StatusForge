@@ -45,6 +45,34 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Permissions / Scopes -->
+                        <div class="my-3">
+                            <label class="form-label">{{ $t("Permissions") }}</label>
+                            <select v-model="scopePreset" class="form-select mb-2" @change="applyScopePreset">
+                                <option value="inherit">{{ $t("Inherit from user role") }}</option>
+                                <option value="read-only">{{ $t("Read Only") }}</option>
+                                <option value="read-write">{{ $t("Read & Write") }}</option>
+                                <option value="custom">{{ $t("Custom") }}</option>
+                            </select>
+                            <div v-if="scopePreset === 'custom'" class="scope-list">
+                                <div v-for="scope in allScopes" :key="scope" class="form-check">
+                                    <input
+                                        :id="'scope-' + scope"
+                                        v-model="selectedScopes"
+                                        class="form-check-input"
+                                        type="checkbox"
+                                        :value="scope"
+                                    />
+                                    <label :for="'scope-' + scope" class="form-check-label">
+                                        <code>{{ scope }}</code>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="form-text">
+                                {{ $t("apiKeyPermissionsHelp") }}
+                            </div>
+                        </div>
                     </div>
                     <div class="modal-footer">
                         <button id="monitor-submit-btn" class="btn btn-primary" type="submit" :disabled="processing">
@@ -107,6 +135,20 @@ export default {
             minDate: this.$root.date(dayjs()) + " 00:00",
             clearKey: null,
             noExpire: false,
+            scopePreset: "inherit",
+            selectedScopes: [],
+            allScopes: [
+                "monitors:read", "monitors:write",
+                "notifications:read", "notifications:write",
+                "status-pages:read", "status-pages:write",
+                "maintenance:read", "maintenance:write",
+                "tags:read", "tags:write",
+                "uptime:read",
+                "docker:read", "docker:write",
+                "users:read", "users:write",
+                "api-keys:read", "api-keys:write",
+                "settings:read", "settings:write",
+            ],
         };
     },
 
@@ -127,6 +169,8 @@ export default {
                 expires: this.minDate,
                 active: 1,
             };
+            this.scopePreset = "inherit";
+            this.selectedScopes = [];
 
             this.keyaddmodal.show();
         },
@@ -140,6 +184,16 @@ export default {
 
             if (this.noExpire) {
                 this.key.expires = null;
+            }
+
+            // Set permissions based on preset
+            if (this.scopePreset === "inherit") {
+                this.key.permissions = null;
+            } else if (this.scopePreset === "custom") {
+                this.key.permissions = [...this.selectedScopes];
+            } else {
+                // read-only or read-write preset — server will resolve via scope groups
+                this.key.permissions = this.scopePreset;
             }
 
             this.$root.addAPIKey(this.key, async (res) => {
@@ -166,6 +220,24 @@ export default {
                 active: 1,
             };
             this.noExpire = false;
+            this.scopePreset = "inherit";
+            this.selectedScopes = [];
+        },
+
+        /**
+         * Apply a scope preset to the selected scopes list
+         * @returns {void}
+         */
+        applyScopePreset() {
+            if (this.scopePreset === "read-only") {
+                this.selectedScopes = this.allScopes.filter(s => s.endsWith(":read"));
+            } else if (this.scopePreset === "read-write") {
+                this.selectedScopes = this.allScopes.filter(s => !s.includes("users:") && !s.includes("settings:"));
+            } else if (this.scopePreset === "custom") {
+                // keep current selections
+            } else {
+                this.selectedScopes = [];
+            }
         },
     },
 };
@@ -187,6 +259,14 @@ export default {
 
 textarea {
     min-height: 150px;
+}
+
+.scope-list {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.375rem;
+    padding: 8px;
 }
 
 .dark-calendar::-webkit-calendar-picker-indicator {

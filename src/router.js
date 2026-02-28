@@ -31,6 +31,8 @@ const Security = () => import("./components/settings/Security.vue");
 import Proxies from "./components/settings/Proxies.vue";
 import About from "./components/settings/About.vue";
 import RemoteBrowsers from "./components/settings/RemoteBrowsers.vue";
+const ManageUsers = () => import("./components/settings/ManageUsers.vue");
+const PermissionGroups = () => import("./components/settings/PermissionGroups.vue");
 
 const routes = [
     {
@@ -132,6 +134,16 @@ const routes = [
                                 component: Proxies,
                             },
                             {
+                                path: "users",
+                                component: ManageUsers,
+                                meta: { requiresAdmin: true },
+                            },
+                            {
+                                path: "permission-groups",
+                                component: PermissionGroups,
+                                meta: { requiresGroupAdmin: true },
+                            },
+                            {
                                 path: "about",
                                 component: About,
                             },
@@ -195,4 +207,27 @@ export const router = createRouter({
     linkActiveClass: "active",
     history: createWebHistory(),
     routes,
+});
+
+router.beforeEach((to, from, next) => {
+    const app = router.app;
+    const userRole = app && app.$root && app.$root.userRole;
+
+    // Guard admin-only routes (full-admin required)
+    if (to.matched.some(record => record.meta.requiresAdmin)) {
+        if (userRole && userRole !== "full-admin") {
+            next({ path: "/settings/general" });
+            return;
+        }
+    }
+
+    // Guard group-admin routes (full-admin or group-admin required)
+    if (to.matched.some(record => record.meta.requiresGroupAdmin)) {
+        if (userRole && userRole !== "full-admin" && userRole !== "group-admin") {
+            next({ path: "/settings/general" });
+            return;
+        }
+    }
+
+    next();
 });

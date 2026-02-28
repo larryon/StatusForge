@@ -5,6 +5,12 @@
                 {{ $t("Quick Stats") }}
             </h1>
 
+            <!-- Filtered access banner for non-admin users -->
+            <div v-if="!$root.isFullAdmin && $root.userRole" class="alert alert-info d-flex align-items-center mb-3" role="alert">
+                <font-awesome-icon icon="info-circle" class="me-2" />
+                <span>{{ $t("filteredDashboardMsg", { count: monitorCount }) }}</span>
+            </div>
+
             <div class="shadow-box big-padding text-center mb-3">
                 <div class="row">
                     <div class="col">
@@ -146,6 +152,13 @@ export default {
         };
     },
     computed: {
+        /**
+         * Count of monitors visible to the user
+         * @returns {number} Number of monitors
+         */
+        monitorCount() {
+            return Object.keys(this.$root.monitorList).length;
+        },
         showGroupColumn() {
             return Object.values(this.$root.monitorList).some((m) => m.parent != null);
         },

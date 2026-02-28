@@ -9,6 +9,7 @@ const io = server.io;
 const { setting } = require("./util-server");
 const checkVersion = require("./check-version");
 const Database = require("./database");
+const { getUserRole, getUserGroupIDs, ROLES } = require("./auth-permissions");
 
 /**
  * Send list of notification providers to client
@@ -19,7 +20,31 @@ async function sendNotificationList(socket) {
     const timeLogger = new TimeLogger();
 
     let result = [];
-    let list = await R.find("notification", " user_id = ? ", [socket.userID]);
+    let list;
+
+    let userRole;
+    try {
+        userRole = await getUserRole(socket.userID);
+    } catch (e) {
+        userRole = null;
+    }
+
+    if (userRole === ROLES.FULL_ADMIN) {
+        // Full-admins see all notifications
+        list = await R.find("notification", " user_id = ? OR user_id IS NULL ", [socket.userID]);
+    } else {
+        // Non-admins see their own + notifications in their permission groups
+        const groupIDs = await getUserGroupIDs(socket.userID);
+        if (groupIDs.length > 0) {
+            const placeholders = groupIDs.map(() => "?").join(",");
+            list = await R.find("notification",
+                ` user_id = ? OR permission_group_id IN (${placeholders}) `,
+                [socket.userID, ...groupIDs]
+            );
+        } else {
+            list = await R.find("notification", " user_id = ? ", [socket.userID]);
+        }
+    }
 
     for (let bean of list) {
         let notificationObject = bean.export();

@@ -84,7 +84,7 @@ export default {
         },
 
         subMenus() {
-            return {
+            let menus = {
                 general: {
                     title: this.$t("General"),
                 },
@@ -122,6 +122,22 @@ export default {
                     title: this.$t("About"),
                 },
             };
+
+            // Admin-only menu items
+            if (this.$root.isFullAdmin) {
+                menus["users"] = {
+                    title: this.$t("Users"),
+                };
+            }
+
+            // Permission Groups: visible to full-admins and group-admins
+            if (this.$root.isFullAdmin || this.$root.userRole === "group-admin") {
+                menus["permission-groups"] = {
+                    title: this.$t("Permission Groups"),
+                };
+            }
+
+            return menus;
         },
     },
 

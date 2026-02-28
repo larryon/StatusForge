@@ -63,7 +63,7 @@ class StatusPage extends BeanModel {
 
         let statusPage = await R.findOne("status_page", " slug = ? ", [slug]);
 
-        if (statusPage) {
+        if (statusPage && statusPage.published) {
             response.send(await StatusPage.renderHTML(indexHTML, statusPage));
         } else {
             response.status(404).send(UptimeKumaServer.getInstance().indexHTML);
@@ -361,7 +361,33 @@ class StatusPage extends BeanModel {
     static async sendStatusPageList(io, socket) {
         let result = {};
 
-        let list = await R.findAll("status_page", " ORDER BY title ");
+        const { getUserRole, getUserGroupIDs, ROLES } = require("../auth-permissions");
+
+        let userRole;
+        try {
+            userRole = await getUserRole(socket.userID);
+        } catch (e) {
+            // Secure-by-default: if role lookup fails, return empty list
+            io.to(socket.userID).emit("statusPageList", {});
+            return [];
+        }
+
+        let list;
+        if (userRole === ROLES.FULL_ADMIN) {
+            list = await R.findAll("status_page", " ORDER BY title ");
+        } else {
+            // Non-admins see only status pages in their permission groups
+            const groupIDs = await getUserGroupIDs(socket.userID);
+            if (groupIDs.length > 0) {
+                const placeholders = groupIDs.map(() => "?").join(",");
+                list = await R.find("status_page",
+                    ` permission_group_id IN (${placeholders}) ORDER BY title `,
+                    groupIDs
+                );
+            } else {
+                list = [];
+            }
+        }
 
         for (let item of list) {
             result[item.id] = await item.toJSON();
@@ -451,6 +477,8 @@ class StatusPage extends BeanModel {
             showCertificateExpiry: !!this.show_certificate_expiry,
             showOnlyLastHeartbeat: !!this.show_only_last_heartbeat,
             rssTitle: this.rss_title,
+            searchEngineIndex: !!this.search_engine_index,
+            permissionGroupId: this.permission_group_id,
         };
     }
 
