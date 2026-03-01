@@ -8,7 +8,7 @@ const apicache = require("../modules/apicache");
 const StatusPage = require("../model/status_page");
 const { UptimeKumaServer } = require("../uptime-kuma-server");
 const { Settings } = require("../settings");
-const { checkFullAdmin, getUserRole, ROLES } = require("../auth-permissions");
+const { checkAdmin } = require("../auth-permissions");
 
 /**
  * Validates incident data
@@ -301,15 +301,8 @@ module.exports.statusPageSocketHandler = (socket) => {
                 throw new Error("No slug?");
             }
 
-            // Permission check: only full-admin can edit status pages outside their groups
-            const userRole = await getUserRole(socket.userID);
-            if (userRole !== ROLES.FULL_ADMIN) {
-                const { getUserGroupIDs } = require("../auth-permissions");
-                const groupIDs = await getUserGroupIDs(socket.userID);
-                if (!statusPage.permission_group_id || !groupIDs.includes(statusPage.permission_group_id)) {
-                    throw new Error("Permission denied.");
-                }
-            }
+            // Only admins can edit status pages
+            checkAdmin(socket);
 
             checkSlug(config.slug);
 
@@ -447,7 +440,7 @@ module.exports.statusPageSocketHandler = (socket) => {
     socket.on("addStatusPage", async (title, slug, callback) => {
         try {
             checkLogin(socket);
-            checkFullAdmin(socket);
+            checkAdmin(socket);
 
             title = title?.trim();
             slug = slug?.trim();
@@ -496,7 +489,7 @@ module.exports.statusPageSocketHandler = (socket) => {
 
         try {
             checkLogin(socket);
-            checkFullAdmin(socket);
+            checkAdmin(socket);
 
             let statusPageID = await StatusPage.slugToID(slug);
 

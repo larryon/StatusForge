@@ -1,5 +1,5 @@
 const { log } = require("../../src/util");
-const { checkFullAdmin, ROLES, MONITOR_ROLES, getUserDirectMonitors, assignMonitorToUser, unassignMonitorFromUser } = require("../auth-permissions");
+const { checkAdmin, ROLES } = require("../auth-permissions");
 const User = require("../model/user");
 const { passwordStrength } = require("check-password-strength");
 const TranslatableError = require("../translatable-error");
@@ -12,11 +12,11 @@ const TranslatableError = require("../translatable-error");
 module.exports.userSocketHandler = (socket) => {
 
     /**
-     * List all users (full-admin only)
+     * List all users (admin only)
      */
     socket.on("getUserList", async (callback) => {
         try {
-            checkFullAdmin(socket);
+            checkAdmin(socket);
 
             const users = await User.listUsers();
 
@@ -33,11 +33,11 @@ module.exports.userSocketHandler = (socket) => {
     });
 
     /**
-     * Add a new user (full-admin only)
+     * Add a new user (admin only)
      */
     socket.on("addUser", async (data, callback) => {
         try {
-            checkFullAdmin(socket);
+            checkAdmin(socket);
 
             if (!data.username || !data.password) {
                 throw new Error("Username and password are required.");
@@ -47,7 +47,7 @@ module.exports.userSocketHandler = (socket) => {
                 throw new TranslatableError("passwordTooWeak");
             }
 
-            const validRoles = [ROLES.FULL_ADMIN, ROLES.GROUP_ADMIN, ROLES.GROUP_READONLY, ROLES.MONITOR_ADMIN, ROLES.MONITOR_READONLY];
+            const validRoles = [ROLES.ADMIN, ROLES.READ_ONLY];
             if (!validRoles.includes(data.role)) {
                 throw new Error("Invalid role specified.");
             }
@@ -60,7 +60,7 @@ module.exports.userSocketHandler = (socket) => {
                 ok: true,
                 msg: "successAdded",
                 msgi18n: true,
-                user: await user.toPublicJSON(),
+                user: user.toPublicJSON(),
             });
         } catch (e) {
             callback({
@@ -72,11 +72,11 @@ module.exports.userSocketHandler = (socket) => {
     });
 
     /**
-     * Edit a user (full-admin only)
+     * Edit a user (admin only)
      */
     socket.on("editUser", async (data, callback) => {
         try {
-            checkFullAdmin(socket);
+            checkAdmin(socket);
 
             if (!data.id) {
                 throw new Error("User ID is required.");
@@ -89,7 +89,7 @@ module.exports.userSocketHandler = (socket) => {
             }
 
             if (data.role !== undefined) {
-                const validRoles = [ROLES.FULL_ADMIN, ROLES.GROUP_ADMIN, ROLES.GROUP_READONLY, ROLES.MONITOR_ADMIN, ROLES.MONITOR_READONLY];
+                const validRoles = [ROLES.ADMIN, ROLES.READ_ONLY];
                 if (!validRoles.includes(data.role)) {
                     throw new Error("Invalid role specified.");
                 }
@@ -111,7 +111,7 @@ module.exports.userSocketHandler = (socket) => {
             callback({
                 ok: true,
                 msg: "Saved.",
-                user: await user.toPublicJSON(),
+                user: user.toPublicJSON(),
             });
         } catch (e) {
             callback({
@@ -122,11 +122,11 @@ module.exports.userSocketHandler = (socket) => {
     });
 
     /**
-     * Reset a user's password (full-admin only)
+     * Reset a user's password (admin only)
      */
     socket.on("resetUserPassword", async (data, callback) => {
         try {
-            checkFullAdmin(socket);
+            checkAdmin(socket);
 
             if (!data.id || !data.newPassword) {
                 throw new Error("User ID and new password are required.");
@@ -154,11 +154,11 @@ module.exports.userSocketHandler = (socket) => {
     });
 
     /**
-     * Delete a user (full-admin only)
+     * Delete a user (admin only)
      */
     socket.on("deleteUser", async (data, callback) => {
         try {
-            checkFullAdmin(socket);
+            checkAdmin(socket);
 
             if (!data.id) {
                 throw new Error("User ID is required.");
@@ -172,87 +172,6 @@ module.exports.userSocketHandler = (socket) => {
             await User.deleteUser(data.id);
 
             log.info("user", `User deleted: ID ${data.id} by user ID: ${socket.userID}`);
-
-            callback({
-                ok: true,
-                msg: "Deleted.",
-            });
-        } catch (e) {
-            callback({
-                ok: false,
-                msg: e.message,
-            });
-        }
-    });
-
-    /**
-     * Get direct monitor assignments for a user (full-admin only)
-     */
-    socket.on("getUserMonitors", async (userID, callback) => {
-        try {
-            checkFullAdmin(socket);
-
-            const monitors = await getUserDirectMonitors(userID);
-
-            callback({
-                ok: true,
-                monitors,
-            });
-        } catch (e) {
-            callback({
-                ok: false,
-                msg: e.message,
-            });
-        }
-    });
-
-    /**
-     * Assign a monitor directly to a user (full-admin only)
-     */
-    socket.on("assignMonitorToUser", async (data, callback) => {
-        try {
-            checkFullAdmin(socket);
-
-            if (!data.userID || !data.monitorID) {
-                throw new Error("User ID and Monitor ID are required.");
-            }
-
-            const validRoles = [MONITOR_ROLES.ADMIN, MONITOR_ROLES.READONLY];
-            if (data.role && !validRoles.includes(data.role)) {
-                throw new Error("Invalid role. Must be admin or readonly.");
-            }
-
-            await assignMonitorToUser(data.userID, data.monitorID, data.role || MONITOR_ROLES.READONLY);
-
-            log.info("user", `Monitor ${data.monitorID} assigned to user ${data.userID} with role ${data.role || MONITOR_ROLES.READONLY} by user ID: ${socket.userID}`);
-
-            callback({
-                ok: true,
-                msg: "successAdded",
-                msgi18n: true,
-            });
-        } catch (e) {
-            callback({
-                ok: false,
-                msg: e.message,
-            });
-        }
-    });
-
-    /**
-     * Remove a direct monitor assignment from a user (full-admin only)
-     */
-    socket.on("unassignMonitorFromUser", async (data, callback) => {
-        try {
-            checkFullAdmin(socket);
-
-            if (!data.userID || !data.monitorID) {
-                throw new Error("User ID and Monitor ID are required.");
-            }
-
-            await unassignMonitorFromUser(data.userID, data.monitorID);
-
-            log.info("user", `Monitor ${data.monitorID} unassigned from user ${data.userID} by user ID: ${socket.userID}`);
 
             callback({
                 ok: true,

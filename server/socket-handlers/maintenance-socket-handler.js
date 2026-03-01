@@ -4,7 +4,7 @@ const { R } = require("redbean-node");
 const apicache = require("../modules/apicache");
 const { UptimeKumaServer } = require("../uptime-kuma-server");
 const Maintenance = require("../model/maintenance");
-const { canEditInGroup, canAccessGroup, ROLES, assertCanEditMaintenance, assertCanAccessMaintenance, checkCanCreateMonitor } = require("../auth-permissions");
+const { ROLES, assertCanEditMaintenance, assertCanAccessMaintenance, checkCanCreateMonitor } = require("../auth-permissions");
 const server = UptimeKumaServer.getInstance();
 
 /**
@@ -50,15 +50,8 @@ module.exports.maintenanceSocketHandler = (socket) => {
 
             let bean = server.getMaintenance(maintenance.id);
 
-            // Permission check: full-admin or group-admin in the maintenance's permission group
-            if (socket.userRole !== ROLES.FULL_ADMIN) {
-                if (bean.user_id !== socket.userID) {
-                    const canEdit = await canEditInGroup(socket.userID, bean.permission_group_id, socket.userRole);
-                    if (!canEdit) {
-                        throw new Error("Permission denied.");
-                    }
-                }
-            }
+            // Permission check: only admins can edit maintenances
+            await assertCanEditMaintenance(socket, bean);
 
             await Maintenance.jsonToBean(bean, maintenance);
             await R.store(bean);
@@ -172,13 +165,8 @@ module.exports.maintenanceSocketHandler = (socket) => {
                 throw new Error("Maintenance not found.");
             }
 
-            // Permission check
-            if (socket.userRole !== ROLES.FULL_ADMIN) {
-                const canAccess = await canAccessGroup(socket.userID, bean.permission_group_id, socket.userRole);
-                if (!canAccess && bean.user_id !== socket.userID) {
-                    throw new Error("Permission denied.");
-                }
-            }
+            // Permission check: all logged-in users can view maintenances
+            // (assertCanAccessMaintenance just checks login)
 
             callback({
                 ok: true,

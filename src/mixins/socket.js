@@ -39,7 +39,6 @@ export default {
             },
             username: null,
             userRole: null,
-            permissionGroups: [],
             remember: localStorage.remember !== "0",
             allowLoginDialog: false, // Allowed to show login dialog, but "loggedIn" have to be true too. This exists because prevent the login dialog show 0.1s in first before the socket server auth-ed.
             loggedIn: false,
@@ -138,7 +137,6 @@ export default {
 
             socket.on("userPermissionInfo", (info) => {
                 this.userRole = info.role;
-                this.permissionGroups = info.permissionGroups;
             });
 
             socket.on("loginRequired", () => {
@@ -473,7 +471,6 @@ export default {
             this.loggedIn = false;
             this.username = null;
             this.userRole = null;
-            this.permissionGroups = [];
             this.clearData();
         },
 
@@ -743,11 +740,11 @@ export default {
 
     computed: {
         /**
-         * Check if current user is a full-admin
-         * @returns {boolean} True if full-admin
+         * Check if current user is an admin
+         * @returns {boolean} True if admin
          */
-        isFullAdmin() {
-            return this.userRole === "full-admin";
+        isAdmin() {
+            return this.userRole === "admin";
         },
 
         usernameFirstChar() {

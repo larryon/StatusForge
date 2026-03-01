@@ -1993,21 +1993,6 @@
                         <div class="col-md-6">
                             <div v-if="$root.isMobile" class="mt-3" />
 
-                            <!-- Permission Group -->
-                            <div v-if="$root.isFullAdmin && permissionGroupList.length > 0" class="mb-4">
-                                <h2 class="mb-2">{{ $t("Permission Group") }}</h2>
-                                <select v-model="monitor.permission_group_id" class="form-select">
-                                    <option :value="null">{{ $t("None") }}</option>
-                                    <option
-                                        v-for="group in permissionGroupList"
-                                        :key="group.id"
-                                        :value="group.id"
-                                    >
-                                        {{ group.name }}
-                                    </option>
-                                </select>
-                            </div>
-
                             <!-- Notifications -->
                             <h2 class="mb-2">{{ $t("Notifications") }}</h2>
                             <p v-if="$root.notificationList.length === 0">
@@ -2941,7 +2926,6 @@ export default {
             minInterval: MIN_INTERVAL_SECOND,
             maxInterval: MAX_INTERVAL_SECOND,
             processing: false,
-            permissionGroupList: [],
             monitor: {
                 notificationIDList: {},
                 // Do not add default value here, please check init() method
@@ -3522,7 +3506,6 @@ message HealthCheckResponse {
     },
     mounted() {
         this.init();
-        this.loadPermissionGroups();
 
         let acceptedStatusCodeOptions = ["100-199", "200-299", "300-399", "400-499", "500-599"];
 
@@ -3565,20 +3548,6 @@ message HealthCheckResponse {
         this.kafkaSaslMechanismOptions = kafkaSaslMechanismOptions;
     },
     methods: {
-        /**
-         * Load permission groups for the dropdown
-         * @returns {void}
-         */
-        loadPermissionGroups() {
-            if (this.$root.isFullAdmin) {
-                this.$root.getSocket().emit("getPermissionGroupList", (res) => {
-                    if (res.ok) {
-                        this.permissionGroupList = res.groups;
-                    }
-                });
-            }
-        },
-
         /**
          * Initialize the edit monitor form
          * @returns {void}

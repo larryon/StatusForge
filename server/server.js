@@ -190,8 +190,7 @@ const { EmbeddedMariaDB } = require("./embedded-mariadb");
 const { SetupDatabase } = require("./setup-database");
 const { chartSocketHandler } = require("./socket-handlers/chart-socket-handler");
 const { userSocketHandler } = require("./socket-handlers/user-socket-handler");
-const { permissionGroupSocketHandler } = require("./socket-handlers/permission-group-socket-handler");
-const { getUserPermissionGroups, ROLES, checkFullAdmin, assertCanEditMonitor, assertCanAccessMonitor, checkCanCreateMonitor, canAccessMonitor } = require("./auth-permissions");
+const { ROLES, checkAdmin, assertCanEditMonitor, assertCanAccessMonitor, checkCanCreateMonitor } = require("./auth-permissions");
 
 app.use(express.json());
 
@@ -375,12 +374,33 @@ let needSetup = false;
         const path = require("path");
         const fs = require("fs");
         const yaml = require("yaml");
-        const swaggerUi = require("swagger-ui-express");
         const openapiPath = path.join(__dirname, "openapi", "openapi.yaml");
         const openapiSpec = yaml.parse(fs.readFileSync(openapiPath, "utf8"));
-        // Use only embedded spec; do not fetch from url (default url = origin returns the SPA HTML)
-        const swaggerOptions = { swaggerOptions: { url: undefined }, customSiteTitle: "Uptime Kuma API" };
-        app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(openapiSpec, swaggerOptions));
+
+        // Serve OpenAPI spec as JSON for the Swagger UI initializer
+        app.get("/api-docs/spec.json", (req, res) => {
+            res.json(openapiSpec);
+        });
+
+        // Override swagger-initializer.js to point Swagger UI at our spec
+        // instead of the default Petstore URL
+        app.get("/api-docs/swagger-initializer.js", (req, res) => {
+            res.set("Content-Type", "application/javascript");
+            res.send(`window.onload = function() {
+  window.ui = SwaggerUIBundle({
+    url: "./spec.json",
+    dom_id: "#swagger-ui",
+    deepLinking: true,
+    presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+    plugins: [SwaggerUIBundle.plugins.DownloadUrl],
+    layout: "StandaloneLayout"
+  });
+};`);
+        });
+
+        // Serve swagger-ui-dist static assets (CSS, JS, images)
+        const swaggerUiDistPath = require("swagger-ui-dist/absolute-path")();
+        app.use("/api-docs", require("express").static(swaggerUiDistPath));
         log.info("server", "API docs available at /api-docs");
     }
 
@@ -725,7 +745,7 @@ let needSetup = false;
                 let user = R.dispense("user");
                 user.username = username;
                 user.password = await passwordHash.generate(password);
-                user.role = ROLES.FULL_ADMIN;
+                user.role = ROLES.ADMIN;
                 await R.store(user);
 
                 needSetup = false;
@@ -793,22 +813,11 @@ let needSetup = false;
                     bean.retry_only_on_status_code_failure = monitor.retryOnlyOnStatusCodeFailure;
                 }
 
-                // Only full-admins can set permission_group_id
-                if (socket.userRole !== ROLES.FULL_ADMIN) {
-                    bean.permission_group_id = null;
-                }
-
                 bean.user_id = socket.userID;
 
                 bean.validate();
 
                 await R.store(bean);
-
-                // Auto-assign monitor access to the creator if they are not a full-admin
-                if (socket.userRole !== ROLES.FULL_ADMIN) {
-                    const { assignMonitorToUser } = require("./auth-permissions");
-                    await assignMonitorToUser(socket.userID, bean.id, "admin");
-                }
 
                 await updateMonitorNotification(bean.id, notificationIDList);
 
@@ -1025,10 +1034,10 @@ let needSetup = false;
         // Returns a simplified list of all monitors for admin assignment UIs
         socket.on("getAllMonitorsList", async (callback) => {
             try {
-                checkFullAdmin(socket);
+                checkAdmin(socket);
 
                 const monitors = await R.getAll(
-                    "SELECT id, name, type, parent, permission_group_id FROM monitor ORDER BY name ASC"
+                    "SELECT id, name, type, parent FROM monitor ORDER BY name ASC"
                 );
 
                 callback({
@@ -1544,9 +1553,9 @@ let needSetup = false;
             try {
                 checkLogin(socket);
 
-                // Only full-admins can change settings
-                if (socket.userRole && socket.userRole !== ROLES.FULL_ADMIN) {
-                    throw new Error("Permission denied. Full-Admin access required.");
+                // Only admins can change settings
+                if (socket.userRole && socket.userRole !== ROLES.ADMIN) {
+                    throw new Error("Permission denied. Admin access required.");
                 }
 
                 // If currently is disabled auth, don't need to check
@@ -1756,7 +1765,7 @@ let needSetup = false;
         socket.on("clearStatistics", async (callback) => {
             try {
                 checkLogin(socket);
-                checkFullAdmin(socket);
+                checkAdmin(socket);
 
                 log.info("manage", `Clear Statistics User ID: ${socket.userID}`);
 
@@ -1793,7 +1802,6 @@ let needSetup = false;
         generalSocketHandler(socket, server);
         chartSocketHandler(socket);
         userSocketHandler(socket);
-        permissionGroupSocketHandler(socket);
 
         log.debug("server", "added all socket handlers");
 
@@ -1880,14 +1888,12 @@ async function checkOwner(userID, monitorID) {
  */
 async function afterLogin(socket, user) {
     socket.userID = user.id;
-    socket.userRole = user.role || ROLES.FULL_ADMIN;
-    socket.permissionGroups = await getUserPermissionGroups(user.id);
+    socket.userRole = user.role || ROLES.ADMIN;
     socket.join(user.id);
 
     // Send user permission info to client
     socket.emit("userPermissionInfo", {
         role: socket.userRole,
-        permissionGroups: socket.permissionGroups,
     });
 
     let monitorList = await server.sendMonitorList(socket);
@@ -1961,7 +1967,7 @@ async function initDatabase(testMode = false) {
             let user = R.dispense("user");
             user.username = envUsername;
             user.password = await passwordHash.generate(envPassword);
-            user.role = ROLES.FULL_ADMIN;
+            user.role = ROLES.ADMIN;
             user.active = 1;
             await R.store(user);
 

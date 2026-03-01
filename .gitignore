@@ -13,6 +13,7 @@ dist-ssr
 /private
 /out
 /tmp
+/coverage
 .env
 
 /extra/healthcheck.exe

@@ -354,40 +354,14 @@ class StatusPage extends BeanModel {
 
     /**
      * Send status page list to client
+     * Both admins and read-only users see all status pages.
      * @param {Server} io io Socket server instance
      * @param {Socket} socket Socket.io instance
      * @returns {Promise<Bean[]>} Status page list
      */
     static async sendStatusPageList(io, socket) {
         let result = {};
-
-        const { getUserRole, getUserGroupIDs, ROLES } = require("../auth-permissions");
-
-        let userRole;
-        try {
-            userRole = await getUserRole(socket.userID);
-        } catch (e) {
-            // Secure-by-default: if role lookup fails, return empty list
-            io.to(socket.userID).emit("statusPageList", {});
-            return [];
-        }
-
-        let list;
-        if (userRole === ROLES.FULL_ADMIN) {
-            list = await R.findAll("status_page", " ORDER BY title ");
-        } else {
-            // Non-admins see only status pages in their permission groups
-            const groupIDs = await getUserGroupIDs(socket.userID);
-            if (groupIDs.length > 0) {
-                const placeholders = groupIDs.map(() => "?").join(",");
-                list = await R.find("status_page",
-                    ` permission_group_id IN (${placeholders}) ORDER BY title `,
-                    groupIDs
-                );
-            } else {
-                list = [];
-            }
-        }
+        let list = await R.findAll("status_page", " ORDER BY title ");
 
         for (let item of list) {
             result[item.id] = await item.toJSON();
@@ -478,7 +452,6 @@ class StatusPage extends BeanModel {
             showOnlyLastHeartbeat: !!this.show_only_last_heartbeat,
             rssTitle: this.rss_title,
             searchEngineIndex: !!this.search_engine_index,
-            permissionGroupId: this.permission_group_id,
         };
     }
 

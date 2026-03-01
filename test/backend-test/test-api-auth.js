@@ -144,28 +144,13 @@ describe("API Auth - ADMIN_ONLY_SCOPES", () => {
 describe("API Auth - getScopesForRole", () => {
     const { getScopesForRole, SCOPE_GROUPS, API_SCOPES } = require("../../server/modules/api-auth");
 
-    test("full-admin gets full-access scopes", () => {
-        const scopes = getScopesForRole("full-admin");
+    test("admin gets full-access scopes", () => {
+        const scopes = getScopesForRole("admin");
         assert.deepStrictEqual(scopes, SCOPE_GROUPS["full-access"]);
     });
 
-    test("group-admin gets read-write scopes", () => {
-        const scopes = getScopesForRole("group-admin");
-        assert.deepStrictEqual(scopes, SCOPE_GROUPS["read-write"]);
-    });
-
-    test("monitor-admin gets read-write scopes", () => {
-        const scopes = getScopesForRole("monitor-admin");
-        assert.deepStrictEqual(scopes, SCOPE_GROUPS["read-write"]);
-    });
-
-    test("group-readonly gets read-only scopes", () => {
-        const scopes = getScopesForRole("group-readonly");
-        assert.deepStrictEqual(scopes, SCOPE_GROUPS["read-only"]);
-    });
-
-    test("monitor-read-only gets read-only scopes", () => {
-        const scopes = getScopesForRole("monitor-read-only");
+    test("read-only gets read-only scopes", () => {
+        const scopes = getScopesForRole("read-only");
         assert.deepStrictEqual(scopes, SCOPE_GROUPS["read-only"]);
     });
 
@@ -175,20 +160,20 @@ describe("API Auth - getScopesForRole", () => {
     });
 
     test("returns a new array each time (not a reference)", () => {
-        const a = getScopesForRole("full-admin");
-        const b = getScopesForRole("full-admin");
+        const a = getScopesForRole("admin");
+        const b = getScopesForRole("admin");
         assert.notStrictEqual(a, b);
         assert.deepStrictEqual(a, b);
     });
 
-    test("full-admin scopes include admin-only scopes", () => {
-        const scopes = getScopesForRole("full-admin");
+    test("admin scopes include admin-only scopes", () => {
+        const scopes = getScopesForRole("admin");
         assert.ok(scopes.includes(API_SCOPES.USERS_READ));
         assert.ok(scopes.includes(API_SCOPES.SETTINGS_WRITE));
     });
 
-    test("non-admin scopes do NOT include admin-only scopes", () => {
-        const scopes = getScopesForRole("group-admin");
+    test("read-only scopes do NOT include admin-only scopes", () => {
+        const scopes = getScopesForRole("read-only");
         assert.ok(!scopes.includes(API_SCOPES.USERS_READ));
         assert.ok(!scopes.includes(API_SCOPES.SETTINGS_WRITE));
     });
@@ -312,8 +297,8 @@ describe("API Auth - requireAdmin middleware", () => {
         return r;
     }
 
-    test("calls next() for full-admin user", () => {
-        const req = { apiUser: { id: 1 }, userRole: "full-admin" };
+    test("calls next() for admin user", () => {
+        const req = { apiUser: { id: 1 }, userRole: "admin" };
         const res = mockRes();
         let nextCalled = false;
         requireAdmin(req, res, () => {
@@ -322,8 +307,8 @@ describe("API Auth - requireAdmin middleware", () => {
         assert.strictEqual(nextCalled, true);
     });
 
-    test("returns 403 for group-admin", () => {
-        const req = { apiUser: { id: 1 }, userRole: "group-admin" };
+    test("returns 403 for read-only", () => {
+        const req = { apiUser: { id: 1 }, userRole: "read-only" };
         const res = mockRes();
         let nextCalled = false;
         requireAdmin(req, res, () => {
@@ -334,8 +319,8 @@ describe("API Auth - requireAdmin middleware", () => {
         assert.strictEqual(res.body.ok, false);
     });
 
-    test("returns 403 for group-readonly", () => {
-        const req = { apiUser: { id: 1 }, userRole: "group-readonly" };
+    test("returns 403 for unknown role", () => {
+        const req = { apiUser: { id: 1 }, userRole: "unknown" };
         const res = mockRes();
         let nextCalled = false;
         requireAdmin(req, res, () => {
@@ -346,7 +331,7 @@ describe("API Auth - requireAdmin middleware", () => {
     });
 
     test("returns 403 when apiUser is null", () => {
-        const req = { apiUser: null, userRole: "full-admin" };
+        const req = { apiUser: null, userRole: "admin" };
         const res = mockRes();
         let nextCalled = false;
         requireAdmin(req, res, () => {
@@ -366,28 +351,6 @@ describe("API Auth - requireAdmin middleware", () => {
         assert.strictEqual(nextCalled, false);
         assert.strictEqual(res.statusCode, 403);
     });
-
-    test("returns 403 for monitor-admin", () => {
-        const req = { apiUser: { id: 1 }, userRole: "monitor-admin" };
-        const res = mockRes();
-        let nextCalled = false;
-        requireAdmin(req, res, () => {
-            nextCalled = true;
-        });
-        assert.strictEqual(nextCalled, false);
-        assert.strictEqual(res.statusCode, 403);
-    });
-
-    test("returns 403 for monitor-read-only", () => {
-        const req = { apiUser: { id: 1 }, userRole: "monitor-read-only" };
-        const res = mockRes();
-        let nextCalled = false;
-        requireAdmin(req, res, () => {
-            nextCalled = true;
-        });
-        assert.strictEqual(nextCalled, false);
-        assert.strictEqual(res.statusCode, 403);
-    });
 });
 
 describe("API Auth - resolveAPIKey (with DB)", () => {
@@ -398,7 +361,7 @@ describe("API Auth - resolveAPIKey (with DB)", () => {
 
     let testDB;
     let adminUserID;
-    let groupAdminUserID;
+    let readOnlyUserID;
     let clearKey;
     let apiKeyID;
     let expiredKeyID;
@@ -418,17 +381,17 @@ describe("API Auth - resolveAPIKey (with DB)", () => {
         const admin = R.dispense("user");
         admin.username = "api_test_admin";
         admin.password = "hashed_pass";
-        admin.role = "full-admin";
+        admin.role = "admin";
         admin.active = 1;
         adminUserID = await R.store(admin);
 
-        // Create a group-admin user
-        const groupAdmin = R.dispense("user");
-        groupAdmin.username = "api_test_group_admin";
-        groupAdmin.password = "hashed_pass";
-        groupAdmin.role = "group-admin";
-        groupAdmin.active = 1;
-        groupAdminUserID = await R.store(groupAdmin);
+        // Create a read-only user
+        const readOnlyUser = R.dispense("user");
+        readOnlyUser.username = "api_test_read_only";
+        readOnlyUser.password = "hashed_pass";
+        readOnlyUser.role = "read-only";
+        readOnlyUser.active = 1;
+        readOnlyUserID = await R.store(readOnlyUser);
 
         // Create a valid API key
         clearKey = "test_clear_key_abc123";
@@ -469,13 +432,13 @@ describe("API Auth - resolveAPIKey (with DB)", () => {
         key3.created_date = new Date().toISOString();
         inactiveKeyID = await R.store(key3);
 
-        // Create an API key with custom scopes (including admin-only) for group-admin
+        // Create an API key with custom scopes (including admin-only) for read-only user
         clearKeyCustom = "test_custom_scope_key";
         const hashedKeyCustom = await passwordHash.generate(clearKeyCustom);
         const key4 = R.dispense("api_key");
         key4.name = "Custom Scopes Key";
         key4.key = hashedKeyCustom;
-        key4.user_id = groupAdminUserID;
+        key4.user_id = readOnlyUserID;
         key4.active = 1;
         key4.permissions = JSON.stringify([API_SCOPES.MONITORS_READ, API_SCOPES.USERS_READ, API_SCOPES.SETTINGS_WRITE]);
         key4.expires = null;
@@ -558,7 +521,7 @@ describe("API Auth - resolveAPIKey (with DB)", () => {
     test("admin-only scopes are filtered for non-admin user", async () => {
         const result = await resolveAPIKey(`uk${customScopesKeyID}_${clearKeyCustom}`);
         assert.ok(result);
-        assert.strictEqual(result.user.role, "group-admin");
+        assert.strictEqual(result.user.role, "read-only");
         // admin-only scopes should be stripped
         assert.ok(result.scopes.includes(API_SCOPES.MONITORS_READ), "Should keep monitors:read");
         assert.ok(!result.scopes.includes(API_SCOPES.USERS_READ), "Should strip users:read");
@@ -576,11 +539,11 @@ describe("API Auth - resolveAPIKey (with DB)", () => {
 
     test("returns null for key owned by inactive user", async () => {
         // Deactivate the user, try to resolve
-        await R.exec("UPDATE `user` SET active = 0 WHERE id = ?", [groupAdminUserID]);
+        await R.exec("UPDATE `user` SET active = 0 WHERE id = ?", [readOnlyUserID]);
         const result = await resolveAPIKey(`uk${customScopesKeyID}_${clearKeyCustom}`);
         assert.strictEqual(result, null);
         // Re-activate
-        await R.exec("UPDATE `user` SET active = 1 WHERE id = ?", [groupAdminUserID]);
+        await R.exec("UPDATE `user` SET active = 1 WHERE id = ?", [readOnlyUserID]);
     });
 
     test("handles invalid JSON in permissions gracefully", async () => {
@@ -607,9 +570,9 @@ describe("API Auth - resolveAPIKey (with DB)", () => {
 describe("API Auth - apiCanAccessMonitor", () => {
     const { apiCanAccessMonitor } = require("../../server/modules/api-auth");
 
-    test("full-admin can access any monitor", async () => {
-        const req = { apiUser: { id: 1 }, userRole: "full-admin" };
-        const result = await apiCanAccessMonitor(req, 999);
+    test("admin can access any monitor", () => {
+        const req = { apiUser: { id: 1 }, userRole: "admin" };
+        const result = apiCanAccessMonitor(req, 999);
         assert.strictEqual(result, true);
     });
 });
@@ -617,9 +580,9 @@ describe("API Auth - apiCanAccessMonitor", () => {
 describe("API Auth - apiCanEditMonitor", () => {
     const { apiCanEditMonitor } = require("../../server/modules/api-auth");
 
-    test("full-admin can edit any monitor", async () => {
-        const req = { apiUser: { id: 1 }, userRole: "full-admin" };
-        const result = await apiCanEditMonitor(req, 999);
+    test("admin can edit any monitor", () => {
+        const req = { apiUser: { id: 1 }, userRole: "admin" };
+        const result = apiCanEditMonitor(req, 999);
         assert.strictEqual(result, true);
     });
 });
@@ -627,9 +590,9 @@ describe("API Auth - apiCanEditMonitor", () => {
 describe("API Auth - apiGetAccessibleMonitorIDs", () => {
     const { apiGetAccessibleMonitorIDs } = require("../../server/modules/api-auth");
 
-    test("full-admin returns null (all monitors)", async () => {
-        const req = { apiUser: { id: 1 }, userRole: "full-admin" };
-        const result = await apiGetAccessibleMonitorIDs(req);
+    test("admin returns null (all monitors)", () => {
+        const req = { apiUser: { id: 1 }, userRole: "admin" };
+        const result = apiGetAccessibleMonitorIDs(req);
         assert.strictEqual(result, null);
     });
 });

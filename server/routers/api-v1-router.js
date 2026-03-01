@@ -13,21 +13,11 @@ const {
 } = require("../modules/api-auth");
 const {
     ROLES,
-    MONITOR_ROLES,
-    getUserPermissionGroups,
-    getUserDirectMonitors,
-    canAccessGroup,
-    canEditInGroup,
-    assignMonitorToUser,
-    getGroupMonitors,
-    assignMonitorToGroup,
-    unassignMonitorFromGroup,
 } = require("../auth-permissions");
 const Monitor = require("../model/monitor");
 const { Notification } = require("../notification");
 const Maintenance = require("../model/maintenance");
 const User = require("../model/user");
-const PermissionGroup = require("../model/permission_group");
 const { DockerHost } = require("../docker");
 const { Settings } = require("../settings");
 const { UptimeKumaServer } = require("../uptime-kuma-server");
@@ -60,7 +50,7 @@ router.get("/api/v1/monitors",
             let query;
             let queryParams;
             if (accessibleIDs === null) {
-                // Full-admin: see all
+                // Admin: see all
                 query = " 1=1 ";
                 queryParams = [];
             } else if (accessibleIDs.size === 0) {
@@ -76,13 +66,8 @@ router.get("/api/v1/monitors",
             const monitorData = monitors.map(m => ({ id: m.id, active: m.active, name: m.name }));
             const preloadData = await Monitor.preparePreloadData(monitorData);
 
-            const isMonitorLevel = req.userRole === ROLES.MONITOR_ADMIN || req.userRole === ROLES.MONITOR_READONLY;
             const result = monitors.map(m => {
-                const json = m.toJSON(preloadData);
-                if (isMonitorLevel) {
-                    json.parent = null;
-                }
-                return json;
+                return m.toJSON(preloadData);
             });
 
             res.json({ ok: true, monitors: result });
@@ -118,11 +103,6 @@ router.get("/api/v1/monitors/:id",
             const preloadData = await Monitor.preparePreloadData([{ id: monitor.id, active: monitor.active, name: monitor.name }]);
             const json = monitor.toJSON(preloadData);
 
-            const isMonitorLevel = req.userRole === ROLES.MONITOR_ADMIN || req.userRole === ROLES.MONITOR_READONLY;
-            if (isMonitorLevel) {
-                json.parent = null;
-            }
-
             res.json({ ok: true, monitor: json });
         } catch (e) {
             log.error("api", e.message);
@@ -139,9 +119,9 @@ router.post("/api/v1/monitors",
     requireScope(API_SCOPES.MONITORS_WRITE),
     async (req, res) => {
         try {
-            // Check if user role allows creating monitors
+            // Only admins can create monitors
             const role = req.userRole;
-            if (role === ROLES.GROUP_READONLY || role === ROLES.MONITOR_ADMIN || role === ROLES.MONITOR_READONLY) {
+            if (role !== ROLES.ADMIN) {
                 return res.status(403).json({ ok: false, msg: "Your role does not allow creating monitors." });
             }
 
@@ -160,21 +140,6 @@ router.post("/api/v1/monitors",
             bean.user_id = req.apiUser.id;
             bean.validate();
             await R.store(bean);
-
-            // Link notifications if provided
-            if (Array.isArray(monitor.notificationIDList)) {
-                for (const notifID of monitor.notificationIDList) {
-                    await R.exec("INSERT INTO monitor_notification (monitor_id, notification_id) VALUES (?, ?)", [bean.id, notifID]);
-                }
-            }
-
-            // Auto-assign to non-admin users via user_monitor
-            if (role !== ROLES.FULL_ADMIN) {
-                await R.exec(
-                    "INSERT INTO user_monitor (user_id, monitor_id, role) VALUES (?, ?, 'admin')",
-                    [req.apiUser.id, bean.id]
-                );
-            }
 
             res.status(201).json({ ok: true, monitorID: bean.id, msg: "Monitor created." });
         } catch (e) {
@@ -458,23 +423,7 @@ router.get("/api/v1/notifications",
     requireScope(API_SCOPES.NOTIFICATIONS_READ),
     async (req, res) => {
         try {
-            let notifications;
-            if (req.userRole === ROLES.FULL_ADMIN) {
-                notifications = await R.findAll("notification");
-            } else {
-                const groups = await getUserPermissionGroups(req.apiUser.id);
-                const groupIDs = groups.map(g => g.groupId);
-                if (groupIDs.length === 0) {
-                    notifications = await R.find("notification", " user_id = ? ", [req.apiUser.id]);
-                } else {
-                    const placeholders = groupIDs.map(() => "?").join(",");
-                    notifications = await R.find(
-                        "notification",
-                        ` user_id = ? OR permission_group_id IN (${placeholders}) `,
-                        [req.apiUser.id, ...groupIDs]
-                    );
-                }
-            }
+            let notifications = await R.findAll("notification");
 
             const result = notifications.map(n => {
                 const data = {
@@ -538,10 +487,6 @@ router.get("/api/v1/notifications/:id",
             const bean = await R.findOne("notification", " id = ? ", [notifID]);
             if (!bean) {
                 return res.status(404).json({ ok: false, msg: "Notification not found." });
-            }
-            // Non-admin can only see own notifications
-            if (req.userRole !== ROLES.FULL_ADMIN && bean.user_id !== req.apiUser.id) {
-                return res.status(403).json({ ok: false, msg: "Access denied." });
             }
             const data = { id: bean.id, name: bean.name, active: bean.active, isDefault: bean.is_default, userID: bean.user_id };
             try {
@@ -735,23 +680,7 @@ router.get("/api/v1/maintenance",
     requireScope(API_SCOPES.MAINTENANCE_READ),
     async (req, res) => {
         try {
-            let maintenanceList;
-            if (req.userRole === ROLES.FULL_ADMIN) {
-                maintenanceList = await R.findAll("maintenance", " ORDER BY id DESC ");
-            } else {
-                const groups = await getUserPermissionGroups(req.apiUser.id);
-                const groupIDs = groups.map(g => g.groupId);
-                if (groupIDs.length === 0) {
-                    maintenanceList = [];
-                } else {
-                    const placeholders = groupIDs.map(() => "?").join(",");
-                    maintenanceList = await R.find(
-                        "maintenance",
-                        ` permission_group_id IN (${placeholders}) ORDER BY id DESC `,
-                        groupIDs
-                    );
-                }
-            }
+            let maintenanceList = await R.findAll("maintenance", " ORDER BY id DESC ");
 
             const result = maintenanceList.map(m => m.toJSON());
             res.json({ ok: true, maintenance: result });
@@ -778,14 +707,6 @@ router.get("/api/v1/maintenance/:id",
             const maintenance = await R.findOne("maintenance", " id = ? ", [maintenanceID]);
             if (!maintenance) {
                 return res.status(404).json({ ok: false, msg: "Maintenance not found." });
-            }
-
-            // Permission check
-            if (req.userRole !== ROLES.FULL_ADMIN) {
-                const hasAccess = await canAccessGroup(req.apiUser.id, maintenance.permission_group_id, req.userRole);
-                if (!hasAccess && maintenance.user_id !== req.apiUser.id) {
-                    return res.status(403).json({ ok: false, msg: "Access denied." });
-                }
             }
 
             res.json({ ok: true, maintenance: await maintenance.toJSON() });
@@ -859,12 +780,9 @@ router.patch("/api/v1/maintenance/:id",
                 return res.status(404).json({ ok: false, msg: "Maintenance not found." });
             }
 
-            // Permission check
-            if (req.userRole !== ROLES.FULL_ADMIN) {
-                const canEdit = await canEditInGroup(req.apiUser.id, bean.permission_group_id, req.userRole);
-                if (!canEdit && bean.user_id !== req.apiUser.id) {
-                    return res.status(403).json({ ok: false, msg: "Permission denied." });
-                }
+            // Only admins can edit
+            if (req.userRole !== ROLES.ADMIN) {
+                return res.status(403).json({ ok: false, msg: "Permission denied." });
             }
 
             // Merge current values with partial update
@@ -910,12 +828,9 @@ router.delete("/api/v1/maintenance/:id",
                 return res.status(404).json({ ok: false, msg: "Maintenance not found." });
             }
 
-            // Permission check
-            if (req.userRole !== ROLES.FULL_ADMIN) {
-                const canEdit = await canEditInGroup(req.apiUser.id, bean.permission_group_id, req.userRole);
-                if (!canEdit && bean.user_id !== req.apiUser.id) {
-                    return res.status(403).json({ ok: false, msg: "Permission denied." });
-                }
+            // Only admins can delete
+            if (req.userRole !== ROLES.ADMIN) {
+                return res.status(403).json({ ok: false, msg: "Permission denied." });
             }
 
             const server = UptimeKumaServer.getInstance();
@@ -1122,23 +1037,7 @@ router.get("/api/v1/status-pages",
     requireScope(API_SCOPES.STATUS_PAGES_READ),
     async (req, res) => {
         try {
-            let statusPages;
-            if (req.userRole === ROLES.FULL_ADMIN) {
-                statusPages = await R.findAll("status_page");
-            } else {
-                const groups = await getUserPermissionGroups(req.apiUser.id);
-                const groupIDs = groups.map(g => g.groupId);
-                if (groupIDs.length === 0) {
-                    statusPages = [];
-                } else {
-                    const placeholders = groupIDs.map(() => "?").join(",");
-                    statusPages = await R.find(
-                        "status_page",
-                        ` permission_group_id IN (${placeholders}) `,
-                        groupIDs
-                    );
-                }
-            }
+            let statusPages = await R.findAll("status_page");
 
             const result = statusPages.map(sp => ({
                 id: sp.id,
@@ -1169,14 +1068,6 @@ router.get("/api/v1/status-pages/:slug",
             const statusPage = await R.findOne("status_page", " slug = ? ", [slug]);
             if (!statusPage) {
                 return res.status(404).json({ ok: false, msg: "Status page not found." });
-            }
-
-            // Permission check
-            if (req.userRole !== ROLES.FULL_ADMIN && statusPage.permission_group_id) {
-                const hasAccess = await canAccessGroup(req.apiUser.id, statusPage.permission_group_id, req.userRole);
-                if (!hasAccess) {
-                    return res.status(403).json({ ok: false, msg: "Access denied." });
-                }
             }
 
             const jsonData = statusPage.toJSON ? statusPage.toJSON() : {
@@ -1238,7 +1129,7 @@ router.get("/api/v1/status-pages/:slug",
 
 /**
  * POST /api/v1/status-pages
- * Create a new status page. Requires full-admin.
+ * Create a new status page. Requires admin.
  */
 router.post("/api/v1/status-pages",
     requireScope(API_SCOPES.STATUS_PAGES_WRITE),
@@ -1297,12 +1188,9 @@ router.patch("/api/v1/status-pages/:slug",
                 return res.status(404).json({ ok: false, msg: "Status page not found." });
             }
 
-            // Permission check
-            if (req.userRole !== ROLES.FULL_ADMIN && bean.permission_group_id) {
-                const canEdit = await canEditInGroup(req.apiUser.id, bean.permission_group_id, req.userRole);
-                if (!canEdit) {
-                    return res.status(403).json({ ok: false, msg: "Permission denied." });
-                }
+            // Only admins can edit status pages
+            if (req.userRole !== ROLES.ADMIN) {
+                return res.status(403).json({ ok: false, msg: "Permission denied." });
             }
 
             const config = req.body;
@@ -1349,9 +1237,6 @@ router.patch("/api/v1/status-pages/:slug",
             }
             if (config.rssTitle !== undefined) {
                 bean.rss_title = config.rssTitle;
-            }
-            if (config.permissionGroupId !== undefined) {
-                bean.permission_group_id = config.permissionGroupId;
             }
             if (config.analyticsId !== undefined) {
                 bean.analytics_id = config.analyticsId;
@@ -1423,7 +1308,7 @@ router.patch("/api/v1/status-pages/:slug",
 
 /**
  * DELETE /api/v1/status-pages/:slug
- * Delete a status page. Requires full-admin.
+ * Delete a status page. Requires admin.
  */
 router.delete("/api/v1/status-pages/:slug",
     requireScope(API_SCOPES.STATUS_PAGES_WRITE),
@@ -1597,7 +1482,7 @@ router.get("/api/v1/uptime",
 
 /**
  * GET /api/v1/docker-hosts
- * List docker hosts (full-admin or read scope).
+ * List docker hosts (admin or read scope).
  */
 router.get("/api/v1/docker-hosts",
     requireScope(API_SCOPES.DOCKER_READ),
@@ -1736,7 +1621,7 @@ router.delete("/api/v1/docker-hosts/:id",
 );
 
 // ========================================================================
-// USERS (full-admin only)
+// USERS (admin only)
 // ========================================================================
 
 /**
@@ -1749,21 +1634,14 @@ router.get("/api/v1/users",
     async (req, res) => {
         try {
             const users = await R.findAll("user");
-            const result = [];
-            for (const user of users) {
-                const groups = await getUserPermissionGroups(user.id);
-                const directMonitors = await getUserDirectMonitors(user.id);
-                result.push({
-                    id: user.id,
-                    username: user.username,
-                    role: user.role,
-                    active: !!user.active,
-                    twofa: !!user.twofa_status,
-                    createdDate: user.created_date,
-                    permissionGroups: groups,
-                    directMonitors,
-                });
-            }
+            const result = users.map(user => ({
+                id: user.id,
+                username: user.username,
+                role: user.role,
+                active: !!user.active,
+                twofa: !!user.twofa_status,
+                createdDate: user.created_date,
+            }));
             res.json({ ok: true, users: result });
         } catch (e) {
             log.error("api", e.message);
@@ -1789,8 +1667,6 @@ router.get("/api/v1/users/:id",
             if (!user) {
                 return res.status(404).json({ ok: false, msg: "User not found." });
             }
-            const groups = await getUserPermissionGroups(user.id);
-            const directMonitors = await getUserDirectMonitors(user.id);
             res.json({
                 ok: true,
                 user: {
@@ -1800,8 +1676,6 @@ router.get("/api/v1/users/:id",
                     active: !!user.active,
                     twofa: !!user.twofa_status,
                     createdDate: user.created_date,
-                    permissionGroups: groups,
-                    directMonitors,
                 },
             });
         } catch (e) {
@@ -1813,7 +1687,7 @@ router.get("/api/v1/users/:id",
 
 /**
  * POST /api/v1/users
- * Create a new user. Requires full-admin.
+ * Create a new user. Requires admin.
  */
 router.post("/api/v1/users",
     requireScope(API_SCOPES.USERS_WRITE),
@@ -1830,7 +1704,7 @@ router.post("/api/v1/users",
                 return res.status(400).json({ ok: false, msg: "Invalid role. Valid: " + validRoles.join(", ") });
             }
 
-            const user = await User.createUser(username, password, role || ROLES.GROUP_READONLY, req.apiUser.id);
+            const user = await User.createUser(username, password, role || ROLES.READ_ONLY, req.apiUser.id);
             res.status(201).json({ ok: true, id: user.id, msg: "User created." });
         } catch (e) {
             log.error("api", e.message);
@@ -1841,7 +1715,7 @@ router.post("/api/v1/users",
 
 /**
  * PATCH /api/v1/users/:id
- * Update a user's info (username, role, active). Requires full-admin.
+ * Update a user's info (username, role, active). Requires admin.
  */
 router.patch("/api/v1/users/:id",
     requireScope(API_SCOPES.USERS_WRITE),
@@ -1879,7 +1753,7 @@ router.patch("/api/v1/users/:id",
 
 /**
  * DELETE /api/v1/users/:id
- * Delete a user. Requires full-admin.
+ * Delete a user. Requires admin.
  */
 router.delete("/api/v1/users/:id",
     requireScope(API_SCOPES.USERS_WRITE),
@@ -1902,7 +1776,7 @@ router.delete("/api/v1/users/:id",
 
 /**
  * POST /api/v1/users/:id/reset-password
- * Reset a user's password. Requires full-admin.
+ * Reset a user's password. Requires admin.
  */
 router.post("/api/v1/users/:id/reset-password",
     requireScope(API_SCOPES.USERS_WRITE),
@@ -1927,50 +1801,6 @@ router.post("/api/v1/users/:id/reset-password",
     }
 );
 
-/**
- * PUT /api/v1/users/:id/monitors
- * Assign direct monitors to a user. Body: { monitors: [{ monitorID, role }] }
- */
-router.put("/api/v1/users/:id/monitors",
-    requireScope(API_SCOPES.USERS_WRITE),
-    requireAdmin,
-    async (req, res) => {
-        try {
-            const id = parseInt(req.params.id);
-            if (isNaN(id)) {
-                return res.status(400).json({ ok: false, msg: "Invalid user ID." });
-            }
-
-            const user = await R.findOne("user", " id = ? ", [id]);
-            if (!user) {
-                return res.status(404).json({ ok: false, msg: "User not found." });
-            }
-
-            const monitors = req.body.monitors;
-            if (!Array.isArray(monitors)) {
-                return res.status(400).json({ ok: false, msg: "monitors must be an array of { monitorID, role }." });
-            }
-
-            // Remove all existing direct monitor assignments
-            await R.exec("DELETE FROM user_monitor WHERE user_id = ?", [id]);
-
-            // Re-assign
-            for (const entry of monitors) {
-                const monitorID = entry.monitorID || entry.id;
-                const role = entry.role || MONITOR_ROLES.ADMIN;
-                if (!Object.values(MONITOR_ROLES).includes(role)) {
-                    return res.status(400).json({ ok: false, msg: `Invalid monitor role: ${role}` });
-                }
-                await assignMonitorToUser(id, monitorID, role);
-            }
-
-            res.json({ ok: true, msg: "User monitors updated." });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(400).json({ ok: false, msg: e.message });
-        }
-    }
-);
 
 // ========================================================================
 // API KEYS (self-service)
@@ -1985,7 +1815,7 @@ router.get("/api/v1/api-keys",
     async (req, res) => {
         try {
             let keys;
-            if (req.userRole === ROLES.FULL_ADMIN) {
+            if (req.userRole === ROLES.ADMIN) {
                 keys = await R.findAll("api_key");
             } else {
                 keys = await R.find("api_key", " user_id = ? ", [req.apiUser.id]);
@@ -2096,10 +1926,10 @@ router.delete("/api/v1/api-keys/:id",
                 return res.status(400).json({ ok: false, msg: "Invalid API key ID." });
             }
 
-            // Allow full-admin to delete any key, otherwise only own keys
+            // Allow admin to delete any key, otherwise only own keys
             let where;
             let params;
-            if (req.userRole === ROLES.FULL_ADMIN) {
+            if (req.userRole === ROLES.ADMIN) {
                 where = " id = ? ";
                 params = [keyID];
             } else {
@@ -2164,7 +1994,7 @@ router.post("/api/v1/api-keys/:id/disable",
 );
 
 // ========================================================================
-// SETTINGS (full-admin only)
+// SETTINGS (admin only)
 // ========================================================================
 
 /**
@@ -2197,286 +2027,6 @@ router.patch("/api/v1/settings",
             const data = req.body;
             await Settings.setSettings("general", data);
             res.json({ ok: true, msg: "Settings updated." });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(400).json({ ok: false, msg: e.message });
-        }
-    }
-);
-
-// ========================================================================
-// PERMISSION GROUPS
-// ========================================================================
-
-/**
- * GET /api/v1/permission-groups
- * List all permission groups.
- */
-router.get("/api/v1/permission-groups",
-    requireScope(API_SCOPES.USERS_READ),
-    async (req, res) => {
-        try {
-            let groups;
-            if (req.userRole === ROLES.FULL_ADMIN) {
-                groups = await PermissionGroup.list();
-            } else {
-                groups = await PermissionGroup.listForUser(req.apiUser.id);
-            }
-            res.json({ ok: true, permissionGroups: groups });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(500).json({ ok: false, msg: e.message });
-        }
-    }
-);
-
-/**
- * GET /api/v1/permission-groups/:id
- * Get a single permission group with members.
- */
-router.get("/api/v1/permission-groups/:id",
-    requireScope(API_SCOPES.USERS_READ),
-    async (req, res) => {
-        try {
-            const id = parseInt(req.params.id);
-            if (isNaN(id)) {
-                return res.status(400).json({ ok: false, msg: "Invalid group ID." });
-            }
-
-            const group = await R.findOne("permission_group", " id = ? ", [id]);
-            if (!group) {
-                return res.status(404).json({ ok: false, msg: "Permission group not found." });
-            }
-
-            // Permission check for non-admin
-            if (req.userRole !== ROLES.FULL_ADMIN) {
-                const hasAccess = await canAccessGroup(req.apiUser.id, id, req.userRole);
-                if (!hasAccess) {
-                    return res.status(403).json({ ok: false, msg: "Access denied." });
-                }
-            }
-
-            const members = await PermissionGroup.getMembers(id);
-            const monitors = await getGroupMonitors(id);
-
-            const groupJSON = group.toJSON ? await group.toJSON() : {
-                id: group.id,
-                name: group.name,
-                description: group.description,
-                active: !!group.active,
-            };
-
-            res.json({
-                ok: true,
-                permissionGroup: groupJSON,
-                members,
-                monitors,
-            });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(500).json({ ok: false, msg: e.message });
-        }
-    }
-);
-
-/**
- * POST /api/v1/permission-groups
- * Create a permission group. Requires full-admin.
- */
-router.post("/api/v1/permission-groups",
-    requireScope(API_SCOPES.USERS_WRITE),
-    requireAdmin,
-    async (req, res) => {
-        try {
-            const { name, description } = req.body;
-            if (!name) {
-                return res.status(400).json({ ok: false, msg: "name is required." });
-            }
-            const group = await PermissionGroup.create(name, description || "");
-            res.status(201).json({ ok: true, id: group.id, msg: "Permission group created." });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(400).json({ ok: false, msg: e.message });
-        }
-    }
-);
-
-/**
- * PATCH /api/v1/permission-groups/:id
- * Update a permission group. Requires full-admin.
- */
-router.patch("/api/v1/permission-groups/:id",
-    requireScope(API_SCOPES.USERS_WRITE),
-    requireAdmin,
-    async (req, res) => {
-        try {
-            const id = parseInt(req.params.id);
-            if (isNaN(id)) {
-                return res.status(400).json({ ok: false, msg: "Invalid group ID." });
-            }
-            await PermissionGroup.update(id, req.body);
-            res.json({ ok: true, id, msg: "Permission group updated." });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(400).json({ ok: false, msg: e.message });
-        }
-    }
-);
-
-/**
- * DELETE /api/v1/permission-groups/:id
- * Delete a permission group. Requires full-admin.
- */
-router.delete("/api/v1/permission-groups/:id",
-    requireScope(API_SCOPES.USERS_WRITE),
-    requireAdmin,
-    async (req, res) => {
-        try {
-            const id = parseInt(req.params.id);
-            if (isNaN(id)) {
-                return res.status(400).json({ ok: false, msg: "Invalid group ID." });
-            }
-            await PermissionGroup.delete(id);
-            res.json({ ok: true, msg: "Permission group deleted." });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(400).json({ ok: false, msg: e.message });
-        }
-    }
-);
-
-/**
- * GET /api/v1/permission-groups/:id/members
- * List members of a permission group.
- */
-router.get("/api/v1/permission-groups/:id/members",
-    requireScope(API_SCOPES.USERS_READ),
-    async (req, res) => {
-        try {
-            const id = parseInt(req.params.id);
-            if (isNaN(id)) {
-                return res.status(400).json({ ok: false, msg: "Invalid group ID." });
-            }
-            const members = await PermissionGroup.getMembers(id);
-            res.json({ ok: true, members });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(500).json({ ok: false, msg: e.message });
-        }
-    }
-);
-
-/**
- * POST /api/v1/permission-groups/:id/members
- * Add a member to a permission group. Body: { userID, role }
- */
-router.post("/api/v1/permission-groups/:id/members",
-    requireScope(API_SCOPES.USERS_WRITE),
-    requireAdmin,
-    async (req, res) => {
-        try {
-            const groupID = parseInt(req.params.id);
-            if (isNaN(groupID)) {
-                return res.status(400).json({ ok: false, msg: "Invalid group ID." });
-            }
-            const { userID, role } = req.body;
-            if (!userID) {
-                return res.status(400).json({ ok: false, msg: "userID is required." });
-            }
-            await PermissionGroup.addMember(userID, groupID, role || ROLES.GROUP_READONLY);
-            res.status(201).json({ ok: true, msg: "Member added to group." });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(400).json({ ok: false, msg: e.message });
-        }
-    }
-);
-
-/**
- * DELETE /api/v1/permission-groups/:id/members/:userId
- * Remove a member from a permission group.
- */
-router.delete("/api/v1/permission-groups/:id/members/:userId",
-    requireScope(API_SCOPES.USERS_WRITE),
-    requireAdmin,
-    async (req, res) => {
-        try {
-            const groupID = parseInt(req.params.id);
-            const userID = parseInt(req.params.userId);
-            if (isNaN(groupID) || isNaN(userID)) {
-                return res.status(400).json({ ok: false, msg: "Invalid group or user ID." });
-            }
-            await PermissionGroup.removeMember(userID, groupID);
-            res.json({ ok: true, msg: "Member removed from group." });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(400).json({ ok: false, msg: e.message });
-        }
-    }
-);
-
-/**
- * GET /api/v1/permission-groups/:id/monitors
- * List monitors assigned to a permission group.
- */
-router.get("/api/v1/permission-groups/:id/monitors",
-    requireScope(API_SCOPES.USERS_READ),
-    async (req, res) => {
-        try {
-            const id = parseInt(req.params.id);
-            if (isNaN(id)) {
-                return res.status(400).json({ ok: false, msg: "Invalid group ID." });
-            }
-            const monitors = await getGroupMonitors(id);
-            res.json({ ok: true, monitors });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(500).json({ ok: false, msg: e.message });
-        }
-    }
-);
-
-/**
- * POST /api/v1/permission-groups/:id/monitors
- * Assign a monitor to a permission group. Body: { monitorID }
- */
-router.post("/api/v1/permission-groups/:id/monitors",
-    requireScope(API_SCOPES.USERS_WRITE),
-    requireAdmin,
-    async (req, res) => {
-        try {
-            const groupID = parseInt(req.params.id);
-            if (isNaN(groupID)) {
-                return res.status(400).json({ ok: false, msg: "Invalid group ID." });
-            }
-            const { monitorID } = req.body;
-            if (!monitorID) {
-                return res.status(400).json({ ok: false, msg: "monitorID is required." });
-            }
-            await assignMonitorToGroup(monitorID, groupID);
-            res.status(201).json({ ok: true, msg: "Monitor assigned to group." });
-        } catch (e) {
-            log.error("api", e.message);
-            res.status(400).json({ ok: false, msg: e.message });
-        }
-    }
-);
-
-/**
- * DELETE /api/v1/permission-groups/:id/monitors/:monitorId
- * Unassign a monitor from a permission group.
- */
-router.delete("/api/v1/permission-groups/:id/monitors/:monitorId",
-    requireScope(API_SCOPES.USERS_WRITE),
-    requireAdmin,
-    async (req, res) => {
-        try {
-            const monitorID = parseInt(req.params.monitorId);
-            if (isNaN(monitorID)) {
-                return res.status(400).json({ ok: false, msg: "Invalid monitor ID." });
-            }
-            await unassignMonitorFromGroup(monitorID);
-            res.json({ ok: true, msg: "Monitor unassigned from group." });
         } catch (e) {
             log.error("api", e.message);
             res.status(400).json({ ok: false, msg: e.message });

@@ -13,7 +13,7 @@ const childProcessAsync = require("promisify-child-process");
 const path = require("path");
 const axios = require("axios");
 const { isSSL, sslKey, sslCert, sslKeyPassphrase } = require("./config");
-const { getUserRole, getAccessibleMonitorIDs, getUserGroupIDs, ROLES } = require("./auth-permissions");
+const { getUserRole, ROLES } = require("./auth-permissions");
 // DO NOT IMPORT HERE IF THE MODULES USED `UptimeKumaServer.getInstance()`, put at the bottom of this file instead.
 
 /**
@@ -247,39 +247,14 @@ class UptimeKumaServer {
 
     /**
      * Get a list of monitors for the given user.
-     * Full-admins see all monitors. Group users see monitors in their assigned permission groups.
+     * Both admins and read-only users see all monitors.
      * @param {string} userID - The ID of the user to get monitors for.
      * @param {number} monitorID - The ID of monitor for.
      * @returns {Promise<object>} A promise that resolves to an object with monitor IDs as keys and monitor objects as values.
      */
     async getMonitorJSONList(userID, monitorID = null) {
-        let userRole;
-        try {
-            userRole = await getUserRole(userID);
-        } catch (e) {
-            // Deny by default if user role cannot be determined
-            log.warn("auth", `Could not determine role for user ${userID}: ${e.message}. Denying access.`);
-            return {};
-        }
-
-        let query;
-        let queryParams;
-
-        if (userRole === ROLES.FULL_ADMIN) {
-            // Full-admins see all monitors
-            query = " 1=1 ";
-            queryParams = [];
-        } else {
-            // Non-admin users: build accessible monitor ID set
-            const accessibleIDs = await getAccessibleMonitorIDs(userID, userRole);
-            if (accessibleIDs.size === 0) {
-                return {};
-            }
-            const idList = [...accessibleIDs];
-            const placeholders = idList.map(() => "?").join(",");
-            query = ` id IN (${placeholders}) `;
-            queryParams = [...idList];
-        }
+        let query = " 1=1 ";
+        let queryParams = [];
 
         if (monitorID) {
             query += "AND id = ? ";
@@ -296,15 +271,8 @@ class UptimeKumaServer {
         const preloadData = await Monitor.preparePreloadData(monitorData);
 
         const result = {};
-        const isMonitorLevelRole = userRole === ROLES.MONITOR_ADMIN || userRole === ROLES.MONITOR_READONLY;
         monitorList.forEach((monitor) => {
-            const json = monitor.toJSON(preloadData);
-            // For monitor-level roles, flatten the hierarchy: remove parent reference
-            // so the monitor appears as a root-level item in the frontend tree
-            if (isMonitorLevelRole) {
-                json.parent = null;
-            }
-            result[monitor.id] = json;
+            result[monitor.id] = monitor.toJSON(preloadData);
         });
         return result;
     }
@@ -331,34 +299,14 @@ class UptimeKumaServer {
 
     /**
      * Get a list of maintenances for the given user.
-     * Full-admins see all maintenances. Group users see only maintenances in their groups or owned by them.
+     * Both admins and read-only users see all maintenances.
      * @param {string} userID - The ID of the user to get maintenances for.
      * @returns {Promise<object>} A promise that resolves to an object with maintenance IDs as keys and maintenances objects as values.
      */
     async getMaintenanceJSONList(userID) {
-        let userRole;
-        try {
-            userRole = await getUserRole(userID);
-        } catch (e) {
-            log.warn("auth", `Could not determine role for user ${userID}: ${e.message}. Denying access.`);
-            return {};
-        }
-
         let result = {};
-        if (userRole === ROLES.FULL_ADMIN) {
-            for (let maintenanceID in this.maintenanceList) {
-                result[maintenanceID] = await this.maintenanceList[maintenanceID].toJSON();
-            }
-        } else {
-            const groupIDs = await getUserGroupIDs(userID);
-            for (let maintenanceID in this.maintenanceList) {
-                const maintenance = this.maintenanceList[maintenanceID];
-                // Show if: user owns it, or it belongs to a group the user is in
-                if (maintenance.user_id === userID ||
-                    (maintenance.permission_group_id && groupIDs.includes(maintenance.permission_group_id))) {
-                    result[maintenanceID] = await maintenance.toJSON();
-                }
-            }
+        for (let maintenanceID in this.maintenanceList) {
+            result[maintenanceID] = await this.maintenanceList[maintenanceID].toJSON();
         }
         return result;
     }

@@ -37,7 +37,7 @@
                     </a>
                 </div>
                 <div class="settings-content col-lg-9 col-md-7">
-                    <div v-if="currentPage" class="settings-content-header">
+                    <div v-if="currentPage && subMenus[currentPage]" class="settings-content-header">
                         {{ subMenus[currentPage].title }}
                     </div>
                     <div class="mx-3">
@@ -124,16 +124,9 @@ export default {
             };
 
             // Admin-only menu items
-            if (this.$root.isFullAdmin) {
+            if (this.$root.isAdmin) {
                 menus["users"] = {
                     title: this.$t("Users"),
-                };
-            }
-
-            // Permission Groups: visible to full-admins and group-admins
-            if (this.$root.isFullAdmin || this.$root.userRole === "group-admin") {
-                menus["permission-groups"] = {
-                    title: this.$t("Permission Groups"),
                 };
             }
 

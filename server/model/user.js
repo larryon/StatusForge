@@ -3,7 +3,6 @@ const passwordHash = require("../password-hash");
 const { R } = require("redbean-node");
 const jwt = require("jsonwebtoken");
 const { shake256, SHAKE256_LENGTH } = require("../util-server");
-const { getUserPermissionGroups, getUserDirectMonitors } = require("../auth-permissions");
 
 class User extends BeanModel {
     /**
@@ -51,11 +50,9 @@ class User extends BeanModel {
 
     /**
      * Convert user bean to JSON, excluding sensitive fields
-     * @returns {Promise<object>} User JSON object
+     * @returns {object} User JSON object
      */
-    async toPublicJSON() {
-        const groups = await getUserPermissionGroups(this.id);
-        const directMonitors = await getUserDirectMonitors(this.id);
+    toPublicJSON() {
         return {
             id: this.id,
             username: this.username,
@@ -64,8 +61,6 @@ class User extends BeanModel {
             twofa_status: this.twofa_status,
             created_by: this.created_by,
             created_date: this.created_date,
-            permissionGroups: groups,
-            directMonitors: directMonitors,
         };
     }
 
@@ -77,7 +72,7 @@ class User extends BeanModel {
      * @param {number|null} createdBy ID of user creating this user
      * @returns {Promise<Bean>} Created user bean
      */
-    static async createUser(username, password, role = "group-readonly", createdBy = null) {
+    static async createUser(username, password, role = "read-only", createdBy = null) {
         // Check if username already exists
         const existing = await R.findOne("user", " username = ? ", [username]);
         if (existing) {
@@ -118,22 +113,22 @@ class User extends BeanModel {
                 }
 
                 if (updates.role !== undefined) {
-                    // Prevent changing the last full-admin to a different role
-                    if (user.role === "full-admin" && updates.role !== "full-admin") {
-                        const adminCount = await trx("user").where({ role: "full-admin", active: 1 }).count("id as count").first();
+                    // Prevent changing the last admin to a different role
+                    if (user.role === "admin" && updates.role !== "admin") {
+                        const adminCount = await trx("user").where({ role: "admin", active: 1 }).count("id as count").first();
                         if (adminCount.count <= 1) {
-                            throw new Error("Cannot change the role of the last full-admin user.");
+                            throw new Error("Cannot change the role of the last admin user.");
                         }
                     }
                     user.role = updates.role;
                 }
 
                 if (updates.active !== undefined) {
-                    // Prevent deactivating the last full-admin
-                    if (user.role === "full-admin" && !updates.active && user.active) {
-                        const adminCount = await trx("user").where({ role: "full-admin", active: 1 }).count("id as count").first();
+                    // Prevent deactivating the last admin
+                    if (user.role === "admin" && !updates.active && user.active) {
+                        const adminCount = await trx("user").where({ role: "admin", active: 1 }).count("id as count").first();
                         if (adminCount.count <= 1) {
-                            throw new Error("Cannot deactivate the last full-admin user.");
+                            throw new Error("Cannot deactivate the last admin user.");
                         }
                     }
                     user.active = updates.active ? 1 : 0;
@@ -157,10 +152,10 @@ class User extends BeanModel {
             if (!user) {
                 throw new Error("User not found.");
             }
-            if (user.role === "full-admin") {
-                const adminCount = await trx("user").where({ role: "full-admin", active: 1 }).count("id as count").first();
+            if (user.role === "admin") {
+                const adminCount = await trx("user").where({ role: "admin", active: 1 }).count("id as count").first();
                 if (adminCount.count <= 1) {
-                    throw new Error("Cannot delete the last full-admin user.");
+                    throw new Error("Cannot delete the last admin user.");
                 }
             }
             await R.trash(user);
@@ -175,7 +170,7 @@ class User extends BeanModel {
         const users = await R.findAll("user", " ORDER BY id ASC ");
         const result = [];
         for (const user of users) {
-            result.push(await user.toPublicJSON());
+            result.push(user.toPublicJSON());
         }
         return result;
     }

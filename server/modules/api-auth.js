@@ -2,7 +2,7 @@ const { R } = require("redbean-node");
 const { log } = require("../../src/util");
 const passwordHash = require("../password-hash");
 const dayjs = require("dayjs");
-const { getAccessibleMonitorIDs, canAccessMonitor, canEditMonitor, ROLES } = require("../auth-permissions");
+const { ROLES } = require("../auth-permissions");
 const { apiRateLimiter } = require("../rate-limiter");
 
 /**
@@ -32,7 +32,7 @@ const API_SCOPES = {
     TAGS_READ: "tags:read",
     TAGS_WRITE: "tags:write",
 
-    // Users (full-admin only)
+    // Users (admin only)
     USERS_READ: "users:read",
     USERS_WRITE: "users:write",
 
@@ -47,7 +47,7 @@ const API_SCOPES = {
     DOCKER_READ: "docker:read",
     DOCKER_WRITE: "docker:write",
 
-    // General settings (full-admin only)
+    // General settings (admin only)
     SETTINGS_READ: "settings:read",
     SETTINGS_WRITE: "settings:write",
 };
@@ -85,8 +85,8 @@ const SCOPE_GROUPS = {
 };
 
 /**
- * Scopes that require full-admin role on the owning user.
- * Even if the scope is on the key, the user must be full-admin.
+ * Scopes that require admin role on the owning user.
+ * Even if the scope is on the key, the user must be admin.
  * @type {Set<string>}
  */
 const ADMIN_ONLY_SCOPES = new Set([
@@ -158,8 +158,8 @@ async function resolveAPIKey(key) {
         scopes = getScopesForRole(user.role);
     }
 
-    // Filter out admin-only scopes if user is not full-admin
-    if (user.role !== ROLES.FULL_ADMIN) {
+    // Filter out admin-only scopes if user is not admin
+    if (user.role !== ROLES.ADMIN) {
         scopes = scopes.filter(s => !ADMIN_ONLY_SCOPES.has(s));
     }
 
@@ -173,13 +173,9 @@ async function resolveAPIKey(key) {
  */
 function getScopesForRole(role) {
     switch (role) {
-        case ROLES.FULL_ADMIN:
+        case ROLES.ADMIN:
             return [...SCOPE_GROUPS["full-access"]];
-        case ROLES.GROUP_ADMIN:
-        case ROLES.MONITOR_ADMIN:
-            return [...SCOPE_GROUPS["read-write"]];
-        case ROLES.GROUP_READONLY:
-        case ROLES.MONITOR_READONLY:
+        case ROLES.READ_ONLY:
             return [...SCOPE_GROUPS["read-only"]];
         default:
             return [...SCOPE_GROUPS["read-only"]];
@@ -258,56 +254,49 @@ function requireScope(requiredScope) {
 }
 
 /**
- * Middleware: require full-admin role on the API key owner.
+ * Middleware: require admin role on the API key owner.
  * @param {import("express").Request} req Express request
  * @param {import("express").Response} res Express response
  * @param {import("express").NextFunction} next Next middleware
  * @returns {void}
  */
 function requireAdmin(req, res, next) {
-    if (!req.apiUser || req.userRole !== ROLES.FULL_ADMIN) {
-        return res.status(403).json({ ok: false, msg: "This endpoint requires full-admin privileges." });
+    if (!req.apiUser || req.userRole !== ROLES.ADMIN) {
+        return res.status(403).json({ ok: false, msg: "This endpoint requires admin privileges." });
     }
     next();
 }
 
 /**
  * Check if the API key owner can access a specific monitor.
- * For monitor-level roles, only directly assigned monitors are accessible.
+ * Both admins and read-only users can access all monitors.
  * @param {import("express").Request} req Express request with apiUser attached
- * @param {number} monitorID Monitor ID to check
- * @returns {Promise<boolean>} true if accessible
+ * @param {number} monitorID Monitor ID to check (unused, all monitors accessible)
+ * @returns {boolean} true always
  */
-async function apiCanAccessMonitor(req, monitorID) {
-    if (req.userRole === ROLES.FULL_ADMIN) {
-        return true;
-    }
-    return await canAccessMonitor(req.apiUser.id, monitorID, req.userRole);
+function apiCanAccessMonitor(req, monitorID) {
+    return true;
 }
 
 /**
  * Check if the API key owner can edit a specific monitor.
+ * Only admins can edit monitors.
  * @param {import("express").Request} req Express request with apiUser attached
- * @param {number} monitorID Monitor ID to check
- * @returns {Promise<boolean>} true if editable
+ * @param {number} monitorID Monitor ID to check (unused, admin check only)
+ * @returns {boolean} true if admin
  */
-async function apiCanEditMonitor(req, monitorID) {
-    if (req.userRole === ROLES.FULL_ADMIN) {
-        return true;
-    }
-    return await canEditMonitor(req.apiUser.id, monitorID, req.userRole);
+function apiCanEditMonitor(req, monitorID) {
+    return req.userRole === ROLES.ADMIN;
 }
 
 /**
  * Get all monitor IDs accessible via this API key's owner.
+ * All users can see all monitors, so always returns null (meaning all).
  * @param {import("express").Request} req Express request with apiUser attached
- * @returns {Promise<Set<number>>} Set of monitor IDs
+ * @returns {null} null = all monitors
  */
-async function apiGetAccessibleMonitorIDs(req) {
-    if (req.userRole === ROLES.FULL_ADMIN) {
-        return null; // null = all monitors
-    }
-    return await getAccessibleMonitorIDs(req.apiUser.id, req.userRole);
+function apiGetAccessibleMonitorIDs(req) {
+    return null;
 }
 
 module.exports = {
