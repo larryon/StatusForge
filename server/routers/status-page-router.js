@@ -50,6 +50,11 @@ router.get("/api/status-page/:slug", cache("5 minutes"), async (request, respons
             return null;
         }
 
+        if (!statusPage.published) {
+            sendHttpError(response, "Status Page Not Found");
+            return null;
+        }
+
         let statusPageData = await StatusPage.getStatusPageData(statusPage);
 
         // Response

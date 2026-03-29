@@ -189,6 +189,8 @@ const { resetChrome } = require("./monitor-types/real-browser-monitor-type");
 const { EmbeddedMariaDB } = require("./embedded-mariadb");
 const { SetupDatabase } = require("./setup-database");
 const { chartSocketHandler } = require("./socket-handlers/chart-socket-handler");
+const { userSocketHandler } = require("./socket-handlers/user-socket-handler");
+const { ROLES, checkAdmin, assertCanEditMonitor, assertCanAccessMonitor, checkCanCreateMonitor } = require("./auth-permissions");
 
 app.use(express.json());
 
@@ -341,6 +343,12 @@ let needSetup = false;
         })
     );
 
+    // In development, dist/ does not exist so serve public/ as fallback
+    // for static assets like icon.svg, icon-192x192.png, etc.
+    if (process.env.NODE_ENV === "development") {
+        app.use("/", express.static("public"));
+    }
+
     // ./data/upload
     app.use("/upload", express.static(Database.uploadDir));
 
@@ -352,9 +360,49 @@ let needSetup = false;
     const apiRouter = require("./routers/api-router");
     app.use(apiRouter);
 
+    // REST API v1 Router (API key authenticated)
+    const apiV1Router = require("./routers/api-v1-router");
+    app.use(express.json());
+    app.use(apiV1Router);
+
     // Status Page Router
     const statusPageRouter = require("./routers/status-page-router");
     app.use(statusPageRouter);
+
+    // API Documentation (Swagger UI) - dev only or when EXPOSE_API_DOCS=1
+    if (isDev || process.env.EXPOSE_API_DOCS === "1") {
+        const path = require("path");
+        const fs = require("fs");
+        const yaml = require("yaml");
+        const openapiPath = path.join(__dirname, "openapi", "openapi.yaml");
+        const openapiSpec = yaml.parse(fs.readFileSync(openapiPath, "utf8"));
+
+        // Serve OpenAPI spec as JSON for the Swagger UI initializer
+        app.get("/api-docs/spec.json", (req, res) => {
+            res.json(openapiSpec);
+        });
+
+        // Override swagger-initializer.js to point Swagger UI at our spec
+        // instead of the default Petstore URL
+        app.get("/api-docs/swagger-initializer.js", (req, res) => {
+            res.set("Content-Type", "application/javascript");
+            res.send(`window.onload = function() {
+  window.ui = SwaggerUIBundle({
+    url: "./spec.json",
+    dom_id: "#swagger-ui",
+    deepLinking: true,
+    presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+    plugins: [SwaggerUIBundle.plugins.DownloadUrl],
+    layout: "StandaloneLayout"
+  });
+};`);
+        });
+
+        // Serve swagger-ui-dist static assets (CSS, JS, images)
+        const swaggerUiDistPath = require("swagger-ui-dist/absolute-path")();
+        app.use("/api-docs", require("express").static(swaggerUiDistPath));
+        log.info("server", "API docs available at /api-docs");
+    }
 
     // Universal Route Handler, must be at the end of all express routes.
     app.get("*", async (_request, response) => {
@@ -697,6 +745,7 @@ let needSetup = false;
                 let user = R.dispense("user");
                 user.username = username;
                 user.password = await passwordHash.generate(password);
+                user.role = ROLES.ADMIN;
                 await R.store(user);
 
                 needSetup = false;
@@ -723,6 +772,7 @@ let needSetup = false;
         socket.on("add", async (monitor, callback) => {
             try {
                 checkLogin(socket);
+                checkCanCreateMonitor(socket);
                 let bean = R.dispense("monitor");
 
                 let notificationIDList = monitor.notificationIDList;
@@ -762,6 +812,7 @@ let needSetup = false;
                 if (monitor.retryOnlyOnStatusCodeFailure !== undefined) {
                     bean.retry_only_on_status_code_failure = monitor.retryOnlyOnStatusCodeFailure;
                 }
+
                 bean.user_id = socket.userID;
 
                 bean.validate();
@@ -802,9 +853,7 @@ let needSetup = false;
 
                 let bean = await R.findOne("monitor", " id = ? ", [monitor.id]);
 
-                if (bean.user_id !== socket.userID) {
-                    throw new Error("Permission denied.");
-                }
+                await assertCanEditMonitor(socket, monitor.id);
 
                 // Check if Parent is Descendant (would cause endless loop)
                 if (monitor.parent !== null) {
@@ -982,13 +1031,35 @@ let needSetup = false;
             }
         });
 
+        // Returns a simplified list of all monitors for admin assignment UIs
+        socket.on("getAllMonitorsList", async (callback) => {
+            try {
+                checkAdmin(socket);
+
+                const monitors = await R.getAll(
+                    "SELECT id, name, type, parent FROM monitor ORDER BY name ASC"
+                );
+
+                callback({
+                    ok: true,
+                    monitors,
+                });
+            } catch (e) {
+                callback({
+                    ok: false,
+                    msg: e.message,
+                });
+            }
+        });
+
         socket.on("getMonitor", async (monitorID, callback) => {
             try {
                 checkLogin(socket);
 
                 log.info("monitor", `Get Monitor: ${monitorID} User ID: ${socket.userID}`);
 
-                let monitor = await R.findOne("monitor", " id = ? AND user_id = ? ", [monitorID, socket.userID]);
+                await assertCanAccessMonitor(socket, monitorID);
+                let monitor = await R.findOne("monitor", " id = ? ", [monitorID]);
                 const monitorData = [{ id: monitor.id, active: monitor.active }];
                 const preloadData = await Monitor.preparePreloadData(monitorData);
                 callback({
@@ -1026,6 +1097,7 @@ let needSetup = false;
         socket.on("getMonitorBeats", async (monitorID, period, callback) => {
             try {
                 checkLogin(socket);
+                await assertCanAccessMonitor(socket, monitorID);
 
                 log.info("monitor", `Get Monitor Beats: ${monitorID} User ID: ${socket.userID}`);
 
@@ -1062,6 +1134,7 @@ let needSetup = false;
         socket.on("resumeMonitor", async (monitorID, callback) => {
             try {
                 checkLogin(socket);
+                await assertCanEditMonitor(socket, monitorID);
                 await startMonitor(socket.userID, monitorID);
                 await server.sendUpdateMonitorIntoList(socket, monitorID);
 
@@ -1081,6 +1154,7 @@ let needSetup = false;
         socket.on("pauseMonitor", async (monitorID, callback) => {
             try {
                 checkLogin(socket);
+                await assertCanEditMonitor(socket, monitorID);
                 await pauseMonitor(socket.userID, monitorID);
                 await server.sendUpdateMonitorIntoList(socket, monitorID);
 
@@ -1109,8 +1183,9 @@ let needSetup = false;
 
                 const startTime = Date.now();
 
+                await assertCanEditMonitor(socket, monitorID);
                 // Check if this is a group monitor
-                const monitor = await R.findOne("monitor", " id = ? AND user_id = ? ", [monitorID, socket.userID]);
+                const monitor = await R.findOne("monitor", " id = ? ", [monitorID]);
 
                 // Log with context about deletion type
                 if (monitor && monitor.type === "group") {
@@ -1279,6 +1354,7 @@ let needSetup = false;
         socket.on("addMonitorTag", async (tagID, monitorID, value, callback) => {
             try {
                 checkLogin(socket);
+                await assertCanEditMonitor(socket, monitorID);
 
                 await R.exec("INSERT INTO monitor_tag (tag_id, monitor_id, value) VALUES (?, ?, ?)", [
                     tagID,
@@ -1304,6 +1380,7 @@ let needSetup = false;
         socket.on("editMonitorTag", async (tagID, monitorID, value, callback) => {
             try {
                 checkLogin(socket);
+                await assertCanEditMonitor(socket, monitorID);
 
                 await R.exec("UPDATE monitor_tag SET value = ? WHERE tag_id = ? AND monitor_id = ?", [
                     value,
@@ -1329,6 +1406,7 @@ let needSetup = false;
         socket.on("deleteMonitorTag", async (tagID, monitorID, value, callback) => {
             try {
                 checkLogin(socket);
+                await assertCanEditMonitor(socket, monitorID);
 
                 await R.exec("DELETE FROM monitor_tag WHERE tag_id = ? AND monitor_id = ? AND value = ?", [
                     tagID,
@@ -1359,6 +1437,7 @@ let needSetup = false;
                 if (monitorID == null) {
                     count = await R.count("heartbeat", "important = 1");
                 } else {
+                    await assertCanAccessMonitor(socket, monitorID);
                     count = await R.count("heartbeat", "monitor_id = ? AND important = 1", [monitorID]);
                 }
 
@@ -1391,6 +1470,7 @@ let needSetup = false;
                         [count, offset]
                     );
                 } else {
+                    await assertCanAccessMonitor(socket, monitorID);
                     list = await R.find(
                         "heartbeat",
                         `
@@ -1472,6 +1552,11 @@ let needSetup = false;
         socket.on("setSettings", async (data, currentPassword, callback) => {
             try {
                 checkLogin(socket);
+
+                // Only admins can change settings
+                if (socket.userRole && socket.userRole !== ROLES.ADMIN) {
+                    throw new Error("Permission denied. Admin access required.");
+                }
 
                 // If currently is disabled auth, don't need to check
                 // Disabled Auth + Want to Disable Auth => No Check
@@ -1631,6 +1716,7 @@ let needSetup = false;
         socket.on("clearEvents", async (monitorID, callback) => {
             try {
                 checkLogin(socket);
+                await assertCanEditMonitor(socket, monitorID);
 
                 log.info("manage", `Clear Events Monitor: ${monitorID} User ID: ${socket.userID}`);
 
@@ -1650,6 +1736,7 @@ let needSetup = false;
         socket.on("clearHeartbeats", async (monitorID, callback) => {
             try {
                 checkLogin(socket);
+                await assertCanEditMonitor(socket, monitorID);
 
                 log.info("manage", `Clear Heartbeats Monitor: ${monitorID} User ID: ${socket.userID}`);
 
@@ -1678,6 +1765,7 @@ let needSetup = false;
         socket.on("clearStatistics", async (callback) => {
             try {
                 checkLogin(socket);
+                checkAdmin(socket);
 
                 log.info("manage", `Clear Statistics User ID: ${socket.userID}`);
 
@@ -1713,6 +1801,7 @@ let needSetup = false;
         remoteBrowserSocketHandler(socket);
         generalSocketHandler(socket, server);
         chartSocketHandler(socket);
+        userSocketHandler(socket);
 
         log.debug("server", "added all socket handlers");
 
@@ -1799,7 +1888,13 @@ async function checkOwner(userID, monitorID) {
  */
 async function afterLogin(socket, user) {
     socket.userID = user.id;
+    socket.userRole = user.role || ROLES.ADMIN;
     socket.join(user.id);
+
+    // Send user permission info to client
+    socket.emit("userPermissionInfo", {
+        role: socket.userRole,
+    });
 
     let monitorList = await server.sendMonitorList(socket);
     await Promise.allSettled([
@@ -1857,8 +1952,31 @@ async function initDatabase(testMode = false) {
 
     // If there is no record in user table, it is a new Uptime Kuma instance, need to setup
     if ((await R.knex("user").count("id as count").first()).count === 0) {
-        log.info("server", "No user, need setup");
-        needSetup = true;
+        // Check if admin credentials are provided via environment variables
+        const envUsername = process.env.UPTIME_KUMA_ADMIN_USERNAME;
+        const envPassword = process.env.UPTIME_KUMA_ADMIN_PASSWORD;
+
+        if (envUsername && envPassword) {
+            log.info("server", "Creating admin user from environment variables");
+
+            if (passwordStrength(envPassword).value === "Too weak") {
+                log.error("server", "UPTIME_KUMA_ADMIN_PASSWORD is too weak. Please use a stronger password.");
+                process.exit(1);
+            }
+
+            let user = R.dispense("user");
+            user.username = envUsername;
+            user.password = await passwordHash.generate(envPassword);
+            user.role = ROLES.ADMIN;
+            user.active = 1;
+            await R.store(user);
+
+            log.info("server", `Admin user "${envUsername}" created from environment variables`);
+            needSetup = false;
+        } else {
+            log.info("server", "No user, need setup");
+            needSetup = true;
+        }
     }
 
     server.jwtSecret = jwtSecretBean.value;

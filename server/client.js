@@ -12,6 +12,7 @@ const Database = require("./database");
 
 /**
  * Send list of notification providers to client
+ * Both admins and read-only users see all notifications.
  * @param {Socket} socket Socket.io socket instance
  * @returns {Promise<Bean[]>} List of notifications
  */
@@ -19,7 +20,7 @@ async function sendNotificationList(socket) {
     const timeLogger = new TimeLogger();
 
     let result = [];
-    let list = await R.find("notification", " user_id = ? ", [socket.userID]);
+    let list = await R.findAll("notification");
 
     for (let bean of list) {
         let notificationObject = bean.export();

@@ -31,6 +31,7 @@ class APIKey extends BeanModel {
             active: this.active,
             expires: this.expires,
             status: this.getStatus(),
+            permissions: this.permissions ? JSON.parse(this.permissions) : null,
         };
     }
 
@@ -48,6 +49,7 @@ class APIKey extends BeanModel {
             active: this.active,
             expires: this.expires,
             status: this.getStatus(),
+            permissions: this.permissions ? JSON.parse(this.permissions) : null,
         };
     }
 
@@ -66,6 +68,7 @@ class APIKey extends BeanModel {
         bean.user_id = userID;
         bean.active = key.active;
         bean.expires = key.expires;
+        bean.permissions = key.permissions ? JSON.stringify(key.permissions) : null;
 
         await R.store(bean);
 

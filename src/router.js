@@ -31,6 +31,7 @@ const Security = () => import("./components/settings/Security.vue");
 import Proxies from "./components/settings/Proxies.vue";
 import About from "./components/settings/About.vue";
 import RemoteBrowsers from "./components/settings/RemoteBrowsers.vue";
+const ManageUsers = () => import("./components/settings/ManageUsers.vue");
 
 const routes = [
     {
@@ -132,6 +133,11 @@ const routes = [
                                 component: Proxies,
                             },
                             {
+                                path: "users",
+                                component: ManageUsers,
+                                meta: { requiresAdmin: true },
+                            },
+                            {
                                 path: "about",
                                 component: About,
                             },
@@ -195,4 +201,19 @@ export const router = createRouter({
     linkActiveClass: "active",
     history: createWebHistory(),
     routes,
+});
+
+router.beforeEach((to, from, next) => {
+    const app = router.app;
+    const userRole = app && app.$root && app.$root.userRole;
+
+    // Guard admin-only routes
+    if (to.matched.some(record => record.meta.requiresAdmin)) {
+        if (userRole && userRole !== "admin") {
+            next({ path: "/settings/general" });
+            return;
+        }
+    }
+
+    next();
 });

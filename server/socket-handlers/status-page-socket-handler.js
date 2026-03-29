@@ -8,6 +8,7 @@ const apicache = require("../modules/apicache");
 const StatusPage = require("../model/status_page");
 const { UptimeKumaServer } = require("../uptime-kuma-server");
 const { Settings } = require("../settings");
+const { checkAdmin } = require("../auth-permissions");
 
 /**
  * Validates incident data
@@ -300,6 +301,9 @@ module.exports.statusPageSocketHandler = (socket) => {
                 throw new Error("No slug?");
             }
 
+            // Only admins can edit status pages
+            checkAdmin(socket);
+
             checkSlug(config.slug);
 
             const header = "data:image/png;base64,";
@@ -436,6 +440,7 @@ module.exports.statusPageSocketHandler = (socket) => {
     socket.on("addStatusPage", async (title, slug, callback) => {
         try {
             checkLogin(socket);
+            checkAdmin(socket);
 
             title = title?.trim();
             slug = slug?.trim();
@@ -484,32 +489,33 @@ module.exports.statusPageSocketHandler = (socket) => {
 
         try {
             checkLogin(socket);
+            checkAdmin(socket);
 
             let statusPageID = await StatusPage.slugToID(slug);
 
-            if (statusPageID) {
-                // Reset entry page if it is the default one.
-                if (server.entryPage === "statusPage-" + slug) {
-                    server.entryPage = "dashboard";
-                    await Settings.set("entryPage", server.entryPage, "general");
-                }
-
-                // No need to delete records from `status_page_cname`, because it has cascade foreign key.
-                // But for incident & group, it is hard to add cascade foreign key during migration, so they have to be deleted manually.
-
-                // Delete incident
-                await R.exec("DELETE FROM incident WHERE status_page_id = ? ", [statusPageID]);
-
-                // Delete group
-                await R.exec("DELETE FROM `group` WHERE status_page_id = ? ", [statusPageID]);
-
-                // Delete status_page
-                await R.exec("DELETE FROM status_page WHERE id = ? ", [statusPageID]);
-
-                apicache.clear();
-            } else {
+            if (!statusPageID) {
                 throw new Error("Status Page is not found");
             }
+
+            // Reset entry page if it is the default one.
+            if (server.entryPage === "statusPage-" + slug) {
+                server.entryPage = "dashboard";
+                await Settings.set("entryPage", server.entryPage, "general");
+            }
+
+            // No need to delete records from `status_page_cname`, because it has cascade foreign key.
+            // But for incident & group, it is hard to add cascade foreign key during migration, so they have to be deleted manually.
+
+            // Delete incident
+            await R.exec("DELETE FROM incident WHERE status_page_id = ? ", [statusPageID]);
+
+            // Delete group
+            await R.exec("DELETE FROM `group` WHERE status_page_id = ? ", [statusPageID]);
+
+            // Delete status_page
+            await R.exec("DELETE FROM status_page WHERE id = ? ", [statusPageID]);
+
+            apicache.clear();
 
             callback({
                 ok: true,

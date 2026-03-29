@@ -63,7 +63,7 @@ class StatusPage extends BeanModel {
 
         let statusPage = await R.findOne("status_page", " slug = ? ", [slug]);
 
-        if (statusPage) {
+        if (statusPage && statusPage.published) {
             response.send(await StatusPage.renderHTML(indexHTML, statusPage));
         } else {
             response.status(404).send(UptimeKumaServer.getInstance().indexHTML);
@@ -354,13 +354,13 @@ class StatusPage extends BeanModel {
 
     /**
      * Send status page list to client
+     * Both admins and read-only users see all status pages.
      * @param {Server} io io Socket server instance
      * @param {Socket} socket Socket.io instance
      * @returns {Promise<Bean[]>} Status page list
      */
     static async sendStatusPageList(io, socket) {
         let result = {};
-
         let list = await R.findAll("status_page", " ORDER BY title ");
 
         for (let item of list) {
@@ -451,6 +451,7 @@ class StatusPage extends BeanModel {
             showCertificateExpiry: !!this.show_certificate_expiry,
             showOnlyLastHeartbeat: !!this.show_only_last_heartbeat,
             rssTitle: this.rss_title,
+            searchEngineIndex: !!this.search_engine_index,
         };
     }
 

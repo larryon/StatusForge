@@ -38,6 +38,7 @@ export default {
                 initedSocketIO: false,
             },
             username: null,
+            userRole: null,
             remember: localStorage.remember !== "0",
             allowLoginDialog: false, // Allowed to show login dialog, but "loggedIn" have to be true too. This exists because prevent the login dialog show 0.1s in first before the socket server auth-ed.
             loggedIn: false,
@@ -132,6 +133,10 @@ export default {
                 this.storage().token = "autoLogin";
                 this.socket.token = "autoLogin";
                 this.allowLoginDialog = false;
+            });
+
+            socket.on("userPermissionInfo", (info) => {
+                this.userRole = info.role;
             });
 
             socket.on("loginRequired", () => {
@@ -460,11 +465,12 @@ export default {
          * @returns {void}
          */
         logout() {
-            socket.emit("logout", () => {});
+            socket.emit("logout", () => { });
             this.storage().removeItem("token");
             this.socket.token = null;
             this.loggedIn = false;
             this.username = null;
+            this.userRole = null;
             this.clearData();
         },
 
@@ -527,7 +533,7 @@ export default {
          */
         getMonitorList(callback) {
             if (!callback) {
-                callback = () => {};
+                callback = () => { };
             }
             socket.emit("getMonitorList", callback);
         },
@@ -539,7 +545,7 @@ export default {
          */
         getMaintenanceList(callback) {
             if (!callback) {
-                callback = () => {};
+                callback = () => { };
             }
             socket.emit("getMaintenanceList", callback);
         },
@@ -551,7 +557,7 @@ export default {
          */
         getAPIKeyList(callback) {
             if (!callback) {
-                callback = () => {};
+                callback = () => { };
             }
             socket.emit("getAPIKeyList", callback);
         },
@@ -733,6 +739,14 @@ export default {
     },
 
     computed: {
+        /**
+         * Check if current user is an admin
+         * @returns {boolean} True if admin
+         */
+        isAdmin() {
+            return this.userRole === "admin";
+        },
+
         usernameFirstChar() {
             if (typeof this.username == "string" && this.username.length >= 1) {
                 return this.username.charAt(0).toUpperCase();

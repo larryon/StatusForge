@@ -7,6 +7,7 @@ const apicache = require("../modules/apicache");
 const APIKey = require("../model/api_key");
 const { Settings } = require("../settings");
 const { sendAPIKeyList } = require("../client");
+const { SCOPE_GROUPS } = require("../modules/api-auth");
 
 /**
  * Handlers for API keys
@@ -18,6 +19,16 @@ module.exports.apiKeySocketHandler = (socket) => {
     socket.on("addAPIKey", async (key, callback) => {
         try {
             checkLogin(socket);
+
+            // Resolve permissions: string preset → scope array, array → keep, null → inherit
+            if (typeof key.permissions === "string" && SCOPE_GROUPS[key.permissions]) {
+                key.permissions = SCOPE_GROUPS[key.permissions];
+            } else if (Array.isArray(key.permissions)) {
+                // Already an array of scopes — keep as-is
+            } else {
+                // null or invalid → inherit from user role
+                key.permissions = null;
+            }
 
             let clearKey = nanoid(40);
             let hashedKey = await passwordHash.generate(clearKey);

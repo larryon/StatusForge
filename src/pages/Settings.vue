@@ -37,7 +37,7 @@
                     </a>
                 </div>
                 <div class="settings-content col-lg-9 col-md-7">
-                    <div v-if="currentPage" class="settings-content-header">
+                    <div v-if="currentPage && subMenus[currentPage]" class="settings-content-header">
                         {{ subMenus[currentPage].title }}
                     </div>
                     <div class="mx-3">
@@ -84,7 +84,7 @@ export default {
         },
 
         subMenus() {
-            return {
+            let menus = {
                 general: {
                     title: this.$t("General"),
                 },
@@ -122,6 +122,15 @@ export default {
                     title: this.$t("About"),
                 },
             };
+
+            // Admin-only menu items
+            if (this.$root.isAdmin) {
+                menus["users"] = {
+                    title: this.$t("Users"),
+                };
+            }
+
+            return menus;
         },
     },
 

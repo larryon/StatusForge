@@ -66,6 +66,28 @@
 
                 <div class="my-3 form-check form-switch">
                     <input
+                        id="published"
+                        v-model="config.published"
+                        class="form-check-input"
+                        type="checkbox"
+                    />
+                    <label class="form-check-label" for="published">{{ $t("Published") }}</label>
+                    <div class="form-text">{{ $t("publishedDescription") }}</div>
+                </div>
+
+                <div class="my-3 form-check form-switch">
+                    <input
+                        id="searchEngineIndex"
+                        v-model="config.searchEngineIndex"
+                        class="form-check-input"
+                        type="checkbox"
+                    />
+                    <label class="form-check-label" for="searchEngineIndex">{{ $t("Search Engine Visibility") }}</label>
+                    <div class="form-text">{{ $t("searchEngineIndexDescription") }}</div>
+                </div>
+
+                <div class="my-3 form-check form-switch">
+                    <input
                         id="showTags"
                         v-model="config.showTags"
                         class="form-check-input"

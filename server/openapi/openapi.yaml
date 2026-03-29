@@ -1,0 +1,2520 @@
+openapi: 3.0.3
+info:
+  title: Uptime Kuma API
+  description: |
+    REST API for Uptime Kuma — a self-hosted monitoring tool.
+
+    ## Authentication
+    All `/api/v1/*` endpoints require an API key via the `Authorization` header:
+    ```
+    Authorization: Bearer uk{id}_{key}
+    ```
+    Or via query parameter: `?apikey=uk{id}_{key}`
+
+    Create API keys in **Settings → API Keys** and assign scopes.
+
+    ## Roles
+    - **admin** — Full access to all resources including users and settings.
+    - **read-only** — Read-only access to monitors, notifications, status pages, maintenance, tags, uptime, and docker hosts.
+
+    ## Scopes
+    API keys have scopes that restrict which endpoints they can access.
+    Admin-only scopes (`users:read`, `users:write`, `settings:read`, `settings:write`) are
+    automatically stripped from keys owned by non-admin users.
+
+    ## Public Endpoints
+    Entry page, push heartbeats, badges, and public status pages do **not** require authentication.
+  version: 2.1.3
+  license:
+    name: MIT
+    url: https://github.com/louislam/uptime-kuma/blob/master/LICENSE
+
+servers:
+  - url: /
+    description: Same-origin (relative to your Uptime Kuma instance)
+
+tags:
+  - name: Public
+    description: Unauthenticated endpoints
+  - name: Badges
+    description: SVG badges for status, uptime, ping, and certificate expiry
+  - name: Status Page (Public)
+    description: Public status page data (unauthenticated)
+  - name: Info
+    description: API info and version
+  - name: Monitors
+    description: Monitor CRUD, pause/resume, heartbeats, and uptime
+  - name: Notifications
+    description: Notification provider CRUD
+  - name: Tags
+    description: Tag CRUD
+  - name: Maintenance
+    description: Maintenance window CRUD with monitor and status page assignments
+  - name: Status Pages
+    description: Status page CRUD and incident management
+  - name: Uptime
+    description: Uptime summary across all monitors
+  - name: Docker Hosts
+    description: Docker host CRUD
+  - name: Users
+    description: User management (admin only)
+  - name: API Keys
+    description: API key management
+  - name: Settings
+    description: General settings (admin only)
+
+paths:
+  /api/entry-page:
+    get:
+      tags: [Public]
+      summary: Get entry page info
+      description: Returns whether the current host maps to a status page or the configured entry page.
+      responses:
+        "200":
+          description: Entry type and optional status page slug
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    type: string
+                    enum: [statusPageMatchedDomain, entryPage]
+                  statusPageSlug:
+                    type: string
+                    description: Present when type is statusPageMatchedDomain
+                  entryPage:
+                    type: string
+                    description: Present when type is entryPage
+
+  /api/push/{pushToken}:
+    get:
+      tags: [Public]
+      summary: Push heartbeat (GET)
+      description: Report a heartbeat for a push-type monitor.
+      parameters:
+        - name: pushToken
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Monitor push token
+        - name: msg
+          in: query
+          schema:
+            type: string
+            default: "OK"
+        - name: ping
+          in: query
+          schema:
+            type: number
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [up, down]
+            default: "up"
+      responses:
+        "200":
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+        "404":
+          description: Monitor not found or not active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [Public]
+      summary: Push heartbeat (POST)
+      parameters:
+        - name: pushToken
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: msg
+          in: query
+          schema:
+            type: string
+            default: "OK"
+        - name: ping
+          in: query
+          schema:
+            type: number
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [up, down]
+            default: "up"
+      responses:
+        "200":
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+        "404":
+          description: Monitor not found or not active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/badge/{id}/status:
+    get:
+      tags: [Badges]
+      summary: Status badge SVG
+      description: Returns an SVG badge showing the monitor status. Monitor must be in a public group.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Monitor ID
+        - name: label
+          in: query
+          schema:
+            type: string
+        - name: upLabel
+          in: query
+          schema:
+            type: string
+            default: "Up"
+        - name: downLabel
+          in: query
+          schema:
+            type: string
+            default: "Down"
+        - name: style
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SVG image
+          content:
+            image/svg+xml:
+              schema:
+                type: string
+
+  /api/badge/{id}/uptime/{duration}:
+    get:
+      tags: [Badges]
+      summary: Uptime percentage badge SVG
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: duration
+          in: path
+          required: true
+          schema:
+            type: string
+            default: "24h"
+          description: "Duration window (e.g. 24h, 7d, 30d)"
+      responses:
+        "200":
+          description: SVG image
+          content:
+            image/svg+xml:
+              schema:
+                type: string
+
+  /api/status-page/{slug}:
+    get:
+      tags: [Status Page (Public)]
+      summary: Get status page data
+      description: Config, incidents, and monitor list for a published status page.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Status page JSON
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Contains config, incidentList, monitorList, etc.
+        "404":
+          description: Status page not found or not published
+
+  /api/status-page/heartbeat/{slug}:
+    get:
+      tags: [Status Page (Public)]
+      summary: Status page heartbeat/polling data
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Heartbeat and uptime data per monitor
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/status-page/{slug}/incident-history:
+    get:
+      tags: [Status Page (Public)]
+      summary: Incident history
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          description: Pagination cursor
+      responses:
+        "200":
+          description: List of incidents with optional next cursor
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  incidents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Incident"
+
+  /api/v1/info:
+    get:
+      tags: [Info]
+      summary: API info
+      description: Returns version, authenticated user info, and effective scopes.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Info object
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  version:
+                    type: string
+                    example: "2.1.3"
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      username:
+                        type: string
+                      role:
+                        type: string
+                        enum: [admin, read-only]
+                  scopes:
+                    type: array
+                    items:
+                      type: string
+                    description: Effective scopes for this API key
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/monitors:
+    get:
+      tags: [Monitors]
+      summary: List all monitors
+      description: Requires scope monitors:read.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of monitors
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  monitors:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Monitor"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [Monitors]
+      summary: Create a monitor
+      description: Requires scope monitors:write and admin role.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MonitorCreate"
+      responses:
+        "201":
+          description: Monitor created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  monitorID:
+                    type: integer
+                  msg:
+                    type: string
+                    example: "Monitor created."
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/monitors/{id}:
+    get:
+      tags: [Monitors]
+      summary: Get monitor by ID
+      description: Requires scope monitors:read.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MonitorId"
+      responses:
+        "200":
+          description: Monitor details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  monitor:
+                    $ref: "#/components/schemas/Monitor"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Monitors]
+      summary: Update a monitor
+      description: Partial update. Requires scope monitors:write and admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MonitorId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MonitorUpdate"
+      responses:
+        "200":
+          description: Monitor updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  monitorID:
+                    type: integer
+                  msg:
+                    type: string
+                    example: "Monitor updated."
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Monitors]
+      summary: Delete a monitor
+      description: Requires scope monitors:write and admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MonitorId"
+      responses:
+        "200":
+          description: Monitor deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/monitors/{id}/pause:
+    post:
+      tags: [Monitors]
+      summary: Pause a monitor
+      description: Requires scope monitors:write and admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MonitorId"
+      responses:
+        "200":
+          description: Monitor paused
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/monitors/{id}/resume:
+    post:
+      tags: [Monitors]
+      summary: Resume a monitor
+      description: Requires scope monitors:write and admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MonitorId"
+      responses:
+        "200":
+          description: Monitor resumed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/monitors/{id}/beats:
+    get:
+      tags: [Monitors]
+      summary: Get heartbeat history
+      description: Returns raw heartbeat records. Requires scope uptime:read.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MonitorId"
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            default: 24
+          description: Lookback window in hours
+      responses:
+        "200":
+          description: Heartbeat list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  heartbeats:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Heartbeat"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/monitors/{id}/uptime:
+    get:
+      tags: [Monitors]
+      summary: Get monitor uptime
+      description: Returns uptime percentage for a single monitor. Requires scope uptime:read.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/MonitorId"
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            default: 24
+          description: Lookback window in hours
+      responses:
+        "200":
+          description: Uptime data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  uptime:
+                    type: number
+                    example: 99.98
+                  total:
+                    type: integer
+                    description: Total heartbeats
+                  up:
+                    type: integer
+                    description: Successful heartbeats
+                  down:
+                    type: integer
+                    description: Failed heartbeats
+                  hours:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/notifications:
+    get:
+      tags: [Notifications]
+      summary: List notifications
+      description: Returns all notification providers. Config details are stripped. Requires scope notifications:read.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Notification list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  notifications:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NotificationSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [Notifications]
+      summary: Create a notification
+      description: Requires scope notifications:write.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationCreate"
+      responses:
+        "201":
+          description: Notification created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: integer
+                  msg:
+                    type: string
+                    example: "Notification created."
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/notifications/{id}:
+    get:
+      tags: [Notifications]
+      summary: Get notification by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Notification details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  notification:
+                    $ref: "#/components/schemas/NotificationSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Notifications]
+      summary: Update a notification
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationCreate"
+      responses:
+        "200":
+          description: Notification updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: integer
+                  msg:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    delete:
+      tags: [Notifications]
+      summary: Delete a notification
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Notification deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/tags:
+    get:
+      tags: [Tags]
+      summary: List tags
+      description: Requires scope tags:read.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Tag list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  tags:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Tag"
+    post:
+      tags: [Tags]
+      summary: Create a tag
+      description: Requires scope tags:write.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  example: "Production"
+                color:
+                  type: string
+                  default: "#4B5563"
+                  example: "#22C55E"
+      responses:
+        "201":
+          description: Tag created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  tag:
+                    $ref: "#/components/schemas/Tag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/tags/{id}:
+    get:
+      tags: [Tags]
+      summary: Get tag by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Tag details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  tag:
+                    $ref: "#/components/schemas/Tag"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Tags]
+      summary: Update a tag
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                color:
+                  type: string
+      responses:
+        "200":
+          description: Tag updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  tag:
+                    $ref: "#/components/schemas/Tag"
+                  msg:
+                    type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Tags]
+      summary: Delete a tag
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Tag deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/maintenance:
+    get:
+      tags: [Maintenance]
+      summary: List maintenance windows
+      description: Requires scope maintenance:read.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Maintenance list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  maintenance:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Maintenance"
+    post:
+      tags: [Maintenance]
+      summary: Create a maintenance window
+      description: Requires scope maintenance:write.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaintenanceCreate"
+      responses:
+        "201":
+          description: Maintenance created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: integer
+                  msg:
+                    type: string
+                    example: "Maintenance created."
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/maintenance/{id}:
+    get:
+      tags: [Maintenance]
+      summary: Get maintenance by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Maintenance details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  maintenance:
+                    $ref: "#/components/schemas/Maintenance"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Maintenance]
+      summary: Update a maintenance window
+      description: Requires scope maintenance:write and admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaintenanceCreate"
+      responses:
+        "200":
+          description: Maintenance updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: integer
+                  msg:
+                    type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Maintenance]
+      summary: Delete a maintenance window
+      description: Requires scope maintenance:write and admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Maintenance deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/maintenance/{id}/pause:
+    post:
+      tags: [Maintenance]
+      summary: Pause a maintenance window
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Maintenance paused
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/maintenance/{id}/resume:
+    post:
+      tags: [Maintenance]
+      summary: Resume a maintenance window
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Maintenance resumed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/maintenance/{id}/monitors:
+    get:
+      tags: [Maintenance]
+      summary: Get monitors assigned to maintenance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Monitor ID list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  monitors:
+                    type: array
+                    items:
+                      type: integer
+                    description: Array of monitor IDs
+    put:
+      tags: [Maintenance]
+      summary: Set monitors for maintenance
+      description: Replaces the current monitor list. Requires scope maintenance:write.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [monitors]
+              properties:
+                monitors:
+                  type: array
+                  items:
+                    type: integer
+                  description: Array of monitor IDs
+      responses:
+        "200":
+          description: Monitor list updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/maintenance/{id}/status-pages:
+    get:
+      tags: [Maintenance]
+      summary: Get status pages assigned to maintenance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Status page ID list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  statusPages:
+                    type: array
+                    items:
+                      type: integer
+    put:
+      tags: [Maintenance]
+      summary: Set status pages for maintenance
+      description: Replaces the current status page list. Requires scope maintenance:write.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [statusPages]
+              properties:
+                statusPages:
+                  type: array
+                  items:
+                    type: integer
+      responses:
+        "200":
+          description: Status page list updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/status-pages:
+    get:
+      tags: [Status Pages]
+      summary: List status pages
+      description: Returns all status pages. Requires scope status-pages:read.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Status page list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  statusPages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StatusPageSummary"
+    post:
+      tags: [Status Pages]
+      summary: Create a status page
+      description: Requires scope status-pages:write and admin role.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, slug]
+              properties:
+                title:
+                  type: string
+                  example: "My Status Page"
+                slug:
+                  type: string
+                  example: "my-status"
+      responses:
+        "201":
+          description: Status page created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: integer
+                  slug:
+                    type: string
+                  msg:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Slug already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/status-pages/{slug}:
+    get:
+      tags: [Status Pages]
+      summary: Get status page by slug
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StatusPageSlug"
+      responses:
+        "200":
+          description: Full status page with groups and incidents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  statusPage:
+                    $ref: "#/components/schemas/StatusPage"
+                  groups:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StatusPageGroup"
+                  incidents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Incident"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Status Pages]
+      summary: Update a status page
+      description: Requires scope status-pages:write and admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StatusPageSlug"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StatusPageUpdate"
+      responses:
+        "200":
+          description: Status page updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  slug:
+                    type: string
+                  msg:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Status Pages]
+      summary: Delete a status page
+      description: Requires scope status-pages:write and admin role. Cascade deletes groups and incidents.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StatusPageSlug"
+      responses:
+        "200":
+          description: Status page deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/status-pages/{slug}/incidents:
+    post:
+      tags: [Status Pages]
+      summary: Create an incident
+      description: Requires scope status-pages:write.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StatusPageSlug"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, content]
+              properties:
+                title:
+                  type: string
+                content:
+                  type: string
+                style:
+                  type: string
+                  enum: [info, warning, danger, primary, light, dark]
+                  default: info
+      responses:
+        "201":
+          description: Incident created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: integer
+                  msg:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/status-pages/{slug}/incidents/{incidentId}:
+    delete:
+      tags: [Status Pages]
+      summary: Delete an incident
+      description: Requires scope status-pages:write.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StatusPageSlug"
+        - name: incidentId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Incident deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/uptime:
+    get:
+      tags: [Uptime]
+      summary: Uptime summary for all monitors
+      description: Requires scope uptime:read.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: hours
+          in: query
+          schema:
+            type: integer
+            default: 24
+          description: Lookback window in hours
+      responses:
+        "200":
+          description: Uptime data per monitor
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  monitors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        monitorID:
+                          type: integer
+                        uptime:
+                          type: number
+                          example: 99.98
+                        total:
+                          type: integer
+                        up:
+                          type: integer
+                        down:
+                          type: integer
+                        avgPing:
+                          type: number
+                  hours:
+                    type: integer
+
+  /api/v1/docker-hosts:
+    get:
+      tags: [Docker Hosts]
+      summary: List docker hosts
+      description: Requires scope docker:read.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Docker host list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  dockerHosts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DockerHost"
+    post:
+      tags: [Docker Hosts]
+      summary: Create a docker host
+      description: Requires scope docker:write.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                dockerType:
+                  type: string
+                  default: "socket"
+                dockerDaemon:
+                  type: string
+                  default: ""
+      responses:
+        "201":
+          description: Docker host created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: integer
+                  msg:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/docker-hosts/{id}:
+    get:
+      tags: [Docker Hosts]
+      summary: Get docker host by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Docker host details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  dockerHost:
+                    $ref: "#/components/schemas/DockerHost"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Docker Hosts]
+      summary: Update a docker host
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                dockerType:
+                  type: string
+                dockerDaemon:
+                  type: string
+      responses:
+        "200":
+          description: Docker host updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: integer
+                  msg:
+                    type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Docker Hosts]
+      summary: Delete a docker host
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Docker host deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/users:
+    get:
+      tags: [Users]
+      summary: List users
+      description: Requires scopes users:read and admin role.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  users:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/User"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [Users]
+      summary: Create a user
+      description: Requires scopes users:write and admin role.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  example: "newuser"
+                password:
+                  type: string
+                  example: "SecureP@ss123"
+                role:
+                  type: string
+                  enum: [admin, read-only]
+                  default: read-only
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: integer
+                  msg:
+                    type: string
+                    example: "User created."
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/users/{id}:
+    get:
+      tags: [Users]
+      summary: Get user by ID
+      description: Requires scopes users:read and admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: User details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  user:
+                    $ref: "#/components/schemas/User"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Users]
+      summary: Update a user
+      description: Update username, role, or active status. Requires scopes users:write and admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                role:
+                  type: string
+                  enum: [admin, read-only]
+                active:
+                  type: boolean
+      responses:
+        "200":
+          description: User updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: integer
+                  msg:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    delete:
+      tags: [Users]
+      summary: Delete a user
+      description: Cannot delete the last admin. Requires scopes users:write and admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: User deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/users/{id}/reset-password:
+    post:
+      tags: [Users]
+      summary: Reset user password
+      description: Requires scopes users:write and admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [newPassword]
+              properties:
+                newPassword:
+                  type: string
+      responses:
+        "200":
+          description: Password reset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/api-keys:
+    get:
+      tags: [API Keys]
+      summary: List API keys
+      description: Admins see all keys; non-admins see only their own. Requires scope api-keys:read.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: API key list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  apiKeys:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/APIKey"
+    post:
+      tags: [API Keys]
+      summary: Create an API key
+      description: The clear-text key is returned only once in the response. Requires scope api-keys:write.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  example: "CI/CD Key"
+                expires:
+                  type: string
+                  format: date-time
+                  nullable: true
+                  description: ISO 8601 expiry date. Null for never.
+                permissions:
+                  description: Scope group name or array of scope strings
+                  oneOf:
+                    - type: string
+                      enum: [read-only, read-write, full-access]
+                    - type: array
+                      items:
+                        type: string
+      responses:
+        "201":
+          description: API key created (clear-text key returned once)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  id:
+                    type: integer
+                  key:
+                    type: string
+                    example: "uk1_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789ab"
+                  msg:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/api-keys/scopes:
+    get:
+      tags: [API Keys]
+      summary: List available scopes
+      description: Returns all scopes, scope groups, and the scopes available to the current user role.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Scope information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  scopes:
+                    type: array
+                    items:
+                      type: string
+                  scopeGroups:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: string
+                  roleScopesForCurrentUser:
+                    type: array
+                    items:
+                      type: string
+
+  /api/v1/api-keys/{id}:
+    delete:
+      tags: [API Keys]
+      summary: Delete an API key
+      description: Admins can delete any key; non-admins only their own. Requires scope api-keys:write.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: API key deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/api-keys/{id}/enable:
+    post:
+      tags: [API Keys]
+      summary: Enable an API key
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: API key enabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/api-keys/{id}/disable:
+    post:
+      tags: [API Keys]
+      summary: Disable an API key
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: API key disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/settings:
+    get:
+      tags: [Settings]
+      summary: Get settings
+      description: Returns general settings. Requires scope settings:read and admin role.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Settings key-value pairs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  settings:
+                    type: object
+                    additionalProperties: true
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      tags: [Settings]
+      summary: Update settings
+      description: Merges provided key-value pairs into settings. Requires scope settings:write and admin role.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: Key-value pairs to update
+      responses:
+        "200":
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessage"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+      description: "API key as Bearer token: Authorization: Bearer uk{id}_{key}"
+
+  parameters:
+    MonitorId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+      description: Monitor ID
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+      description: Resource ID
+    StatusPageSlug:
+      name: slug
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Status page URL slug
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Insufficient permissions or scope
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Invalid request data
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [ok, msg]
+      properties:
+        ok:
+          type: boolean
+          example: false
+        msg:
+          type: string
+          description: Error message
+
+    SuccessMessage:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        msg:
+          type: string
+
+    Monitor:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        type:
+          type: string
+          description: "Monitor type (http, keyword, tcp, dns, ping, push, etc.)"
+        url:
+          type: string
+        hostname:
+          type: string
+        port:
+          type: integer
+        active:
+          type: boolean
+        weight:
+          type: integer
+        interval:
+          type: integer
+          description: Check interval in seconds
+        retryInterval:
+          type: integer
+        resendInterval:
+          type: integer
+        maxretries:
+          type: integer
+        maxredirects:
+          type: integer
+        timeout:
+          type: integer
+        keyword:
+          type: string
+        invertKeyword:
+          type: boolean
+        upsideDown:
+          type: boolean
+        ignoreTls:
+          type: boolean
+        method:
+          type: string
+        headers:
+          type: string
+        body:
+          type: string
+        basic_auth_user:
+          type: string
+        basic_auth_pass:
+          type: string
+        pushToken:
+          type: string
+        parent:
+          type: integer
+          nullable: true
+        description:
+          type: string
+        dns_resolve_type:
+          type: string
+        dns_resolve_server:
+          type: string
+        docker_container:
+          type: string
+        docker_host:
+          type: integer
+        proxyId:
+          type: integer
+        accepted_statuscodes:
+          type: array
+          items:
+            type: string
+        create_date:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            type: object
+            properties:
+              tag_id:
+                type: integer
+              name:
+                type: string
+              color:
+                type: string
+              value:
+                type: string
+
+    MonitorCreate:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          example: "My Website"
+        type:
+          type: string
+          example: "http"
+          description: "http, keyword, tcp, dns, ping, push, grpc, mqtt, etc."
+        url:
+          type: string
+          example: "https://example.com"
+        hostname:
+          type: string
+        port:
+          type: integer
+        method:
+          type: string
+          default: "GET"
+        interval:
+          type: integer
+          default: 60
+        retryInterval:
+          type: integer
+          default: 60
+        resendInterval:
+          type: integer
+          default: 0
+        maxretries:
+          type: integer
+          default: 0
+        maxredirects:
+          type: integer
+          default: 10
+        timeout:
+          type: integer
+          default: 48
+        keyword:
+          type: string
+        invertKeyword:
+          type: boolean
+          default: false
+        active:
+          type: boolean
+          default: true
+        upsideDown:
+          type: boolean
+          default: false
+        ignoreTls:
+          type: boolean
+          default: false
+        accepted_statuscodes:
+          type: array
+          items:
+            type: string
+          default: ["200-299"]
+        headers:
+          type: string
+        body:
+          type: string
+        basic_auth_user:
+          type: string
+        basic_auth_pass:
+          type: string
+        parent:
+          type: integer
+          nullable: true
+        weight:
+          type: integer
+          default: 0
+        description:
+          type: string
+
+    MonitorUpdate:
+      type: object
+      description: Partial monitor object — only include fields to update
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        url:
+          type: string
+        hostname:
+          type: string
+        port:
+          type: integer
+        method:
+          type: string
+        interval:
+          type: integer
+        active:
+          type: boolean
+        keyword:
+          type: string
+        weight:
+          type: integer
+        description:
+          type: string
+
+    Heartbeat:
+      type: object
+      properties:
+        id:
+          type: integer
+        monitor_id:
+          type: integer
+        status:
+          type: integer
+          description: "1 = Up, 0 = Down, 2 = Pending, 3 = Maintenance"
+        time:
+          type: string
+          format: date-time
+        msg:
+          type: string
+        ping:
+          type: number
+          nullable: true
+        important:
+          type: boolean
+        duration:
+          type: integer
+
+    NotificationSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        active:
+          type: boolean
+        isDefault:
+          type: boolean
+        userID:
+          type: integer
+        type:
+          type: string
+          description: "Provider type (telegram, smtp, slack, etc.)"
+
+    NotificationCreate:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          example: "My Telegram"
+        type:
+          type: string
+          example: "telegram"
+        active:
+          type: boolean
+          default: true
+        isDefault:
+          type: boolean
+          default: false
+      description: Additional provider-specific fields vary by type.
+
+    Tag:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        color:
+          type: string
+
+    Maintenance:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        strategy:
+          type: string
+          description: "manual, recurring-interval, etc."
+        active:
+          type: boolean
+        dateRange:
+          type: array
+          items:
+            type: string
+            nullable: true
+        timeRange:
+          type: array
+          items:
+            type: object
+            properties:
+              hours:
+                type: integer
+              minutes:
+                type: integer
+
+    MaintenanceCreate:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          example: "Scheduled Maintenance"
+        strategy:
+          type: string
+          default: "manual"
+        description:
+          type: string
+          default: ""
+        active:
+          type: boolean
+          default: true
+        dateRange:
+          type: array
+          items:
+            type: string
+            nullable: true
+        timeRange:
+          type: array
+          items:
+            type: object
+            properties:
+              hours:
+                type: integer
+              minutes:
+                type: integer
+
+    StatusPageSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+        slug:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        published:
+          type: boolean
+        icon:
+          type: string
+
+    StatusPage:
+      type: object
+      properties:
+        id:
+          type: integer
+        slug:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        icon:
+          type: string
+        theme:
+          type: string
+        published:
+          type: boolean
+        searchEngineIndex:
+          type: boolean
+        showTags:
+          type: boolean
+        footerText:
+          type: string
+        customCSS:
+          type: string
+        showPoweredBy:
+          type: boolean
+        showCertificateExpiry:
+          type: boolean
+        autoRefreshInterval:
+          type: integer
+
+    StatusPageUpdate:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        icon:
+          type: string
+        theme:
+          type: string
+        published:
+          type: boolean
+        searchEngineIndex:
+          type: boolean
+        showTags:
+          type: boolean
+        footerText:
+          type: string
+        customCSS:
+          type: string
+        showPoweredBy:
+          type: boolean
+        showCertificateExpiry:
+          type: boolean
+        autoRefreshInterval:
+          type: integer
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatusPageGroup"
+
+    StatusPageGroup:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+          default: "Services"
+        weight:
+          type: integer
+          default: 0
+        monitors:
+          type: array
+          items:
+            type: object
+            properties:
+              monitorID:
+                type: integer
+              weight:
+                type: integer
+              sendUrl:
+                type: boolean
+              customUrl:
+                type: string
+
+    Incident:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        content:
+          type: string
+        style:
+          type: string
+          enum: [info, warning, danger, primary, light, dark]
+        pin:
+          type: boolean
+        active:
+          type: boolean
+        createdDate:
+          type: string
+          format: date-time
+        lastUpdatedDate:
+          type: string
+          format: date-time
+
+    DockerHost:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        dockerType:
+          type: string
+        dockerDaemon:
+          type: string
+        userID:
+          type: integer
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, read-only]
+        active:
+          type: boolean
+        twofa_status:
+          type: boolean
+        created_date:
+          type: string
+          format: date-time
+
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        userID:
+          type: integer
+        active:
+          type: boolean
+        expires:
+          type: string
+          format: date-time
+          nullable: true
+        createdDate:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [active, inactive, expired]
+        permissions:
+          type: array
+          items:
+            type: string
+          description: List of scope strings

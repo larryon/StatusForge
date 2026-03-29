@@ -4,6 +4,7 @@ const { R } = require("redbean-node");
 const apicache = require("../modules/apicache");
 const { UptimeKumaServer } = require("../uptime-kuma-server");
 const Maintenance = require("../model/maintenance");
+const { ROLES, assertCanEditMaintenance, assertCanAccessMaintenance, checkCanCreateMonitor } = require("../auth-permissions");
 const server = UptimeKumaServer.getInstance();
 
 /**
@@ -49,9 +50,8 @@ module.exports.maintenanceSocketHandler = (socket) => {
 
             let bean = server.getMaintenance(maintenance.id);
 
-            if (bean.user_id !== socket.userID) {
-                throw new Error("Permission denied.");
-            }
+            // Permission check: only admins can edit maintenances
+            await assertCanEditMaintenance(socket, bean);
 
             await Maintenance.jsonToBean(bean, maintenance);
             await R.store(bean);
@@ -77,6 +77,14 @@ module.exports.maintenanceSocketHandler = (socket) => {
     socket.on("addMonitorMaintenance", async (maintenanceID, monitors, callback) => {
         try {
             checkLogin(socket);
+
+            let bean = server.getMaintenance(maintenanceID);
+            if (!bean) {
+                bean = await R.findOne("maintenance", " id = ? ", [maintenanceID]);
+            }
+            if (bean) {
+                await assertCanEditMaintenance(socket, bean);
+            }
 
             await R.exec("DELETE FROM monitor_maintenance WHERE maintenance_id = ?", [maintenanceID]);
 
@@ -109,6 +117,14 @@ module.exports.maintenanceSocketHandler = (socket) => {
     socket.on("addMaintenanceStatusPage", async (maintenanceID, statusPages, callback) => {
         try {
             checkLogin(socket);
+
+            let bean = server.getMaintenance(maintenanceID);
+            if (!bean) {
+                bean = await R.findOne("maintenance", " id = ? ", [maintenanceID]);
+            }
+            if (bean) {
+                await assertCanEditMaintenance(socket, bean);
+            }
 
             await R.exec("DELETE FROM maintenance_status_page WHERE maintenance_id = ?", [maintenanceID]);
 
@@ -143,7 +159,14 @@ module.exports.maintenanceSocketHandler = (socket) => {
 
             log.debug("maintenance", `Get Maintenance: ${maintenanceID} User ID: ${socket.userID}`);
 
-            let bean = await R.findOne("maintenance", " id = ? AND user_id = ? ", [maintenanceID, socket.userID]);
+            let bean = await R.findOne("maintenance", " id = ? ", [maintenanceID]);
+
+            if (!bean) {
+                throw new Error("Maintenance not found.");
+            }
+
+            // Permission check: all logged-in users can view maintenances
+            // (assertCanAccessMaintenance just checks login)
 
             callback({
                 ok: true,
@@ -179,6 +202,14 @@ module.exports.maintenanceSocketHandler = (socket) => {
 
             log.debug("maintenance", `Get Monitors for Maintenance: ${maintenanceID} User ID: ${socket.userID}`);
 
+            let bean = server.getMaintenance(maintenanceID);
+            if (!bean) {
+                bean = await R.findOne("maintenance", " id = ? ", [maintenanceID]);
+            }
+            if (bean) {
+                await assertCanAccessMaintenance(socket, bean);
+            }
+
             let monitors = await R.getAll(
                 "SELECT monitor.id FROM monitor_maintenance mm JOIN monitor ON mm.monitor_id = monitor.id WHERE mm.maintenance_id = ? ",
                 [maintenanceID]
@@ -202,6 +233,14 @@ module.exports.maintenanceSocketHandler = (socket) => {
             checkLogin(socket);
 
             log.debug("maintenance", `Get Status Pages for Maintenance: ${maintenanceID} User ID: ${socket.userID}`);
+
+            let bean = server.getMaintenance(maintenanceID);
+            if (!bean) {
+                bean = await R.findOne("maintenance", " id = ? ", [maintenanceID]);
+            }
+            if (bean) {
+                await assertCanAccessMaintenance(socket, bean);
+            }
 
             let statusPages = await R.getAll(
                 "SELECT status_page.id, status_page.title FROM maintenance_status_page msp JOIN status_page ON msp.status_page_id = status_page.id WHERE msp.maintenance_id = ? ",
@@ -227,12 +266,20 @@ module.exports.maintenanceSocketHandler = (socket) => {
 
             log.debug("maintenance", `Delete Maintenance: ${maintenanceID} User ID: ${socket.userID}`);
 
+            let bean = server.getMaintenance(maintenanceID);
+            if (!bean) {
+                bean = await R.findOne("maintenance", " id = ? ", [maintenanceID]);
+            }
+            if (bean) {
+                await assertCanEditMaintenance(socket, bean);
+            }
+
             if (maintenanceID in server.maintenanceList) {
                 server.maintenanceList[maintenanceID].stop();
                 delete server.maintenanceList[maintenanceID];
             }
 
-            await R.exec("DELETE FROM maintenance WHERE id = ? AND user_id = ? ", [maintenanceID, socket.userID]);
+            await R.exec("DELETE FROM maintenance WHERE id = ? ", [maintenanceID]);
 
             apicache.clear();
 
@@ -262,6 +309,8 @@ module.exports.maintenanceSocketHandler = (socket) => {
             if (!maintenance) {
                 throw new Error("Maintenance not found");
             }
+
+            await assertCanEditMaintenance(socket, maintenance);
 
             maintenance.active = false;
             await R.store(maintenance);
@@ -295,6 +344,8 @@ module.exports.maintenanceSocketHandler = (socket) => {
             if (!maintenance) {
                 throw new Error("Maintenance not found");
             }
+
+            await assertCanEditMaintenance(socket, maintenance);
 
             maintenance.active = true;
             await R.store(maintenance);
